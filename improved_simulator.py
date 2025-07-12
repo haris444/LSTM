@@ -113,118 +113,56 @@ def calculate_all_indicators(data, params):
     return indicators
 
 
+# In improved_simulator.py
+
 def generate_all_signals(indicators, params, current_idx, previous_idx=None):
     """
     Generate signals for all indicators based on assignment specification.
-
-    Args:
-        indicators: Dictionary of calculated indicators
-        params: Parameters including thresholds
-        current_idx: Current time index
-        previous_idx: Previous time index (for crossover signals)
-
-    Returns:
-        List of signals for aggregation
+    Can also be used to isolate a single indicator's signal for debugging.
     """
-    signals = []
+    all_signals = []
 
-    # 1. SMA Crossover Signal
-    if previous_idx is not None:
-        sma_short_curr = indicators['sma_short'].iloc[current_idx]
-        sma_long_curr = indicators['sma_long'].iloc[current_idx]
-        sma_short_prev = indicators['sma_short'].iloc[previous_idx]
-        sma_long_prev = indicators['sma_long'].iloc[previous_idx]
-
-        # Golden Cross (short > long) and Death Cross (short < long)
-        if (sma_short_curr > sma_long_curr) and (sma_short_prev <= sma_long_prev):
-            signals.append(1)  # Golden cross - long signal
-        elif (sma_short_curr < sma_long_curr) and (sma_short_prev >= sma_long_prev):
-            signals.append(-1)  # Death cross - short signal
-        else:
-            signals.append(0)
-
-    # 2. EMA Crossover Signal
-    if previous_idx is not None:
-        ema_short_curr = indicators['ema_short'].iloc[current_idx]
-        ema_long_curr = indicators['ema_long'].iloc[current_idx]
-        ema_short_prev = indicators['ema_short'].iloc[previous_idx]
-        ema_long_prev = indicators['ema_long'].iloc[previous_idx]
-
-        if (ema_short_curr > ema_long_curr) and (ema_short_prev <= ema_long_prev):
-            signals.append(1)
-        elif (ema_short_curr < ema_long_curr) and (ema_short_prev >= ema_long_prev):
-            signals.append(-1)
-        else:
-            signals.append(0)
-
-    # 3. RSI Signal with thresholds
-    rsi_signal = generate_signal(
-        indicators['rsi'].iloc[current_idx],
-        params['rsi_theta_plus'],
-        params['rsi_theta_minus']
-    )
-    signals.append(rsi_signal)
-
-    # 4. MACD Crossover Signal
-    if previous_idx is not None:
-        macd_curr = indicators['macd_line'].iloc[current_idx]
-        signal_curr = indicators['macd_signal'].iloc[current_idx]
-        macd_prev = indicators['macd_line'].iloc[previous_idx]
-        signal_prev = indicators['macd_signal'].iloc[previous_idx]
-
-        if (macd_curr > signal_curr) and (macd_prev <= signal_prev):
-            signals.append(1)
-        elif (macd_curr < signal_curr) and (macd_prev >= signal_prev):
-            signals.append(-1)
-        else:
-            signals.append(0)
-
-    # 5. Bollinger Bands Signal
-    price_curr = indicators['bb_middle'].iloc[current_idx] if 'bb_middle' in indicators else 0
-    bb_upper = indicators['bb_upper'].iloc[current_idx]
-    bb_lower = indicators['bb_lower'].iloc[current_idx]
-
-    if price_curr < bb_lower:
-        signals.append(1)  # Price below lower band - potential reversal up
-    elif price_curr > bb_upper:
-        signals.append(-1)  # Price above upper band - potential reversal down
+    # Calculate all potential signals
+    # 1. SMA
+    sma_diff = indicators['sma_short'].iloc[current_idx] - indicators['sma_long'].iloc[current_idx]
+    all_signals.append(generate_signal(sma_diff, params['sma_theta_plus'], params['sma_theta_minus']))
+    # 2. EMA
+    ema_diff = indicators['ema_short'].iloc[current_idx] - indicators['ema_long'].iloc[current_idx]
+    all_signals.append(generate_signal(ema_diff, params['ema_theta_plus'], params['ema_theta_minus']))
+    # 3. RSI
+    all_signals.append(
+        generate_signal(indicators['rsi'].iloc[current_idx], params['rsi_theta_plus'], params['rsi_theta_minus']))
+    # 4. MACD
+    macd_diff = indicators['macd_line'].iloc[current_idx] - indicators['macd_signal'].iloc[current_idx]
+    all_signals.append(generate_signal(macd_diff, params['macd_theta_plus'], params['macd_theta_minus']))
+    # 5. Bollinger Bands
+    price_curr = indicators['bb_middle'].iloc[current_idx]
+    if price_curr < indicators['bb_lower'].iloc[current_idx]:
+        all_signals.append(1)
+    elif price_curr > indicators['bb_upper'].iloc[current_idx]:
+        all_signals.append(-1)
     else:
-        signals.append(0)
+        all_signals.append(0)
+    # 6. OBV
+    obv_diff = indicators['obv'].iloc[current_idx] - indicators['obv_sma'].iloc[current_idx]
+    all_signals.append(generate_signal(obv_diff, params['obv_theta_plus'], params['obv_theta_minus']))
+    # 7. P/E Ratio
+    pe_signal = generate_signal(indicators.get('pe_ratio', pd.Series(0)).iloc[current_idx], params['pe_theta_plus'],
+                                params['pe_theta_minus'])
+    all_signals.append(-pe_signal)  # Inverted signal
+    # 8. Earnings Surprise
+    surprise = indicators.get('earnings_surprise', pd.Series(0)).iloc[current_idx]
+    all_signals.append(generate_signal(surprise, params['surprise_theta_plus'],
+                                       params['surprise_theta_minus']) if surprise != 0 else 0)
 
-    # 6. OBV Signal
-    if previous_idx is not None:
-        obv_curr = indicators['obv'].iloc[current_idx]
-        obv_sma_curr = indicators['obv_sma'].iloc[current_idx]
-        obv_prev = indicators['obv'].iloc[previous_idx]
-        obv_sma_prev = indicators['obv_sma'].iloc[previous_idx]
+    # --- Isolation Logic for Debugging ---
+    if 'use_single_indicator' in params:
+        indicator_index = params['use_single_indicator']
+        isolated_signals = [0] * len(all_signals)
+        isolated_signals[indicator_index] = all_signals[indicator_index]
+        return isolated_signals
 
-        if (obv_curr > obv_sma_curr) and (obv_prev <= obv_sma_prev):
-            signals.append(1)
-        elif (obv_curr < obv_sma_curr) and (obv_prev >= obv_sma_prev):
-            signals.append(-1)
-        else:
-            signals.append(0)
-
-    # 7. P/E Ratio Signal (if available)
-    if 'pe_ratio' in indicators:
-        pe_signal = generate_signal(
-            indicators['pe_ratio'].iloc[current_idx],
-            params.get('pe_theta_plus', 25),  # High P/E threshold
-            params.get('pe_theta_minus', 10)  # Low P/E threshold
-        )
-        # Invert P/E signal (low P/E = undervalued = long signal)
-        signals.append(-pe_signal)
-
-    # 8. Earnings Surprise Signal (if available)
-    if 'earnings_surprise' in indicators:
-        surprise_signal = generate_signal(
-            indicators['earnings_surprise'].iloc[current_idx],
-            params.get('surprise_theta_plus', 5),  # Positive surprise threshold
-            params.get('surprise_theta_minus', -5)  # Negative surprise threshold
-        )
-        signals.append(surprise_signal)
-
-    return signals
+    return all_signals
 
 
 def aggregate_signals(signals, method='majority_vote', weights=None):
@@ -299,69 +237,37 @@ def run_improved_simulation(data, params):
             weights=params.get('signal_weights', None)
         )
 
-        # Execute trading logic
-        if final_decision > 0:  # Long signal
-            if position < 0:  # Close short position
-                capital += position * current_price - transaction_fee
-                trade_log.append({
-                    'date': data.index[i],
-                    'action': 'close_short',
-                    'shares': -position,
-                    'price': current_price,
-                    'capital': capital
-                })
-                position = 0
+        # Execute trading logic based on assignment rules
+        # Close position if signal is neutral or opposite
+        if position != 0 and (final_decision == 0 or final_decision == -np.sign(position)):
+            action = 'close_long' if position > 0 else 'close_short'
+            capital += position * current_price - transaction_fee
+            trade_log.append({
+                'date': data.index[i], 'action': action,
+                'shares': abs(position), 'price': current_price, 'capital': capital
+            })
+            position = 0
 
-            if position == 0:  # Open long position
+        # Open a new position if there's a signal and no current position
+        if position == 0 and final_decision != 0:
+            if final_decision > 0:  # Open long
                 max_shares = calculate_position_size(capital, current_price, transaction_fee, 'long')
                 if max_shares > 0:
                     position = max_shares
                     capital -= position * current_price + transaction_fee
                     trade_log.append({
-                        'date': data.index[i],
-                        'action': 'open_long',
-                        'shares': position,
-                        'price': current_price,
-                        'capital': capital
+                        'date': data.index[i], 'action': 'open_long',
+                        'shares': position, 'price': current_price, 'capital': capital
                     })
-
-        elif final_decision < 0:  # Short signal
-            if position > 0:  # Close long position
-                capital += position * current_price - transaction_fee
-                trade_log.append({
-                    'date': data.index[i],
-                    'action': 'close_long',
-                    'shares': position,
-                    'price': current_price,
-                    'capital': capital
-                })
-                position = 0
-
-            if position == 0:  # Open short position
+            else:  # Open short
                 max_shares = calculate_position_size(capital, current_price, transaction_fee, 'short', lambda_worst)
                 if max_shares > 0:
                     position = -max_shares
-                    capital -= position * current_price - transaction_fee  # Note: position is negative
+                    capital -= position * current_price - transaction_fee  # Position is negative
                     trade_log.append({
-                        'date': data.index[i],
-                        'action': 'open_short',
-                        'shares': -position,
-                        'price': current_price,
-                        'capital': capital
+                        'date': data.index[i], 'action': 'open_short',
+                        'shares': -position, 'price': current_price, 'capital': capital
                     })
-
-        else:  # Neutral signal - close any open position
-            if position != 0:
-                action = 'close_long' if position > 0 else 'close_short'
-                capital += position * current_price - transaction_fee
-                trade_log.append({
-                    'date': data.index[i],
-                    'action': action,
-                    'shares': abs(position),
-                    'price': current_price,
-                    'capital': capital
-                })
-                position = 0
 
         # Update portfolio value
         portfolio_values.iloc[i] = capital + (position * current_price)

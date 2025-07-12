@@ -1,10 +1,13 @@
+# computational_finance_q1.py
 import os
 import pandas as pd
 import numpy as np
 import itertools
-import matplotlib.pyplot as plt
 import sys
 import pickle
+import time
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Import necessary functions from other files
 from improved_simulator import run_improved_simulation
@@ -52,198 +55,328 @@ def analyze_parameter_sensitivity(results):
     print("=" * 60)
 
 
-# =============================================================================
-# Main Execution
-# =============================================================================
-
-print("=" * 60)
-print("COMPUTATIONAL FINANCE - QUESTION 1 IMPLEMENTATION")
-print("=" * 60)
-
-# --- 1. Load Data ---
-print("\nLoading and Preparing Data...")
-try:
-    # Load the daily price and volume data
-    df = pd.read_csv('data/daily_data.csv', index_col=0, parse_dates=True)
-    print(f"Successfully loaded daily price data with shape: {df.shape}")
-
-    # Load the pickled data to get real fundamental data
-    with open('data/collected_data.pkl', 'rb') as f:
-        collected_data = pickle.load(f)
-
-    # Extract the real earnings data for MSFT
-    msft_earnings_df = collected_data.get('fundamental', {}).get('MSFT_EARNINGS', pd.DataFrame())
-
-    if msft_earnings_df.empty:
-        print("Warning: Real earnings data not found. Fundamental indicators will be skipped.")
-    else:
-        print(f"Successfully loaded real earnings data for MSFT with {len(msft_earnings_df)} reports.")
-
-    # Add fundamental indicators to the main DataFrame
-    print("Adding fundamental indicators (P/E Ratio, Earnings Surprise)...")
-    df = add_fundamental_indicators_to_data(df, msft_earnings_df)
-    print(f"Enhanced data shape: {df.shape}")
-    print(f"Available columns: {list(df.columns)}")
-
-except FileNotFoundError:
-    print("ERROR: Data files not found. Please run TimeSeriesDataCollection.py and data_preparation.py first.")
-    sys.exit()
-except Exception as e:
-    print(f"ERROR loading or preparing data: {e}")
-    sys.exit()
-
-# --- 2. Split Data ---
-train_size = int(len(df) * 0.8)
-train_df = df.iloc[:train_size]
-test_df = df.iloc[train_size:]
-
-print(f"\nTraining data from {train_df.index.min()} to {train_df.index.max()}")
-print(f"Testing data from {test_df.index.min()} to {test_df.index.max()}")
-
-# --- 3. Parameter Optimization ---
-print("\n" + "=" * 60)
-print("PARAMETER OPTIMIZATION (GRID SEARCH)")
-print("=" * 60)
-
-param_grid = {
-    'initial_capital': [100000.0], 'transaction_fee': [5.0],
-    'lambda_worst': [1.5, 2.0], 'price_column': ['MSFT_close'],
-    'volume_column': ['MSFT_volume'],
-    # Test both aggregation methods
-    'aggregation_method': ['majority_vote', 'weighted_sum'],
-    'sma_short_window': [10, 20, 50], 'sma_long_window': [100, 200],
-    'ema_short_window': [12, 20], 'ema_long_window': [26, 50],
-    'rsi_window': [7, 14, 21], 'rsi_theta_minus': [25, 30],
-    'rsi_theta_plus': [70, 75], 'macd_fast': [12],
-    'macd_slow': [26], 'macd_signal': [9],
-    'bb_window': [20, 30], 'bb_std_dev': [2.0, 2.5],
-    'obv_window': [20, 30], 'pe_theta_minus': [10, 12],
-    'pe_theta_plus': [20, 25], 'surprise_theta_minus': [-5],
-    'surprise_theta_plus': [5],
-}
-
-keys, values = zip(*param_grid.items())
-param_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-
-# Filter out invalid combinations
-valid_combinations = [
-    params for params in param_combinations
-    if params['sma_short_window'] < params['sma_long_window'] and
-       params['ema_short_window'] < params['ema_long_window'] and
-       params['rsi_theta_minus'] < params['rsi_theta_plus'] and
-       params['pe_theta_minus'] < params['pe_theta_plus'] and
-       params['surprise_theta_minus'] < params['surprise_theta_plus']
-]
-
-print(f"Generated {len(valid_combinations)} valid parameter combinations for testing.")
-print("Starting optimization...")
-
-results = []
-best_sharpe = -np.inf
-best_params = None
-
-for i, params in enumerate(valid_combinations):
-    try:
-        sharpe, portfolio_values, trade_log = run_improved_simulation(train_df, params)
-        results.append({
-            'params': params, 'sharpe_ratio': sharpe,
-            'final_value': portfolio_values.iloc[-1],
-            'total_trades': len(trade_log)
-        })
-        if sharpe > best_sharpe:
-            best_sharpe = sharpe
-            best_params = params
-        if (i + 1) % 50 == 0:
-            print(f"Processed {i + 1}/{len(valid_combinations)} | Best Sharpe: {best_sharpe:.4f}")
-    except Exception as e:
-        print(f"Error in combination {i + 1}: {e}")
-        continue
-
-# --- 4. Training Results and Analysis ---
-print("\n" + "=" * 60)
-print("OPTIMIZATION RESULTS ON TRAINING DATA")
-print("=" * 60)
-
-if best_params:
-    print(f"Best Sharpe Ratio Found: {best_sharpe:.4f}")
-    print("\nOptimal Parameters:")
-    for key, value in best_params.items():
-        print(f"  {key}: {value}")
-    # Run sensitivity analysis
-    analyze_parameter_sensitivity(results)
-else:
-    print("No profitable strategy found during the training phase.")
-
-# --- 5. Test Set Evaluation ---
-if best_params:
-    print("\n" + "=" * 60)
-    print("EVALUATION ON TEST DATA")
+def main():
+    """
+    Main execution function that runs the trading strategy optimization.
+    """
+    print("=" * 60)
+    print("COMPUTATIONAL FINANCE - QUESTION 1 IMPLEMENTATION")
     print("=" * 60)
 
+    # --- 1. Load Data ---
+    print("\nLoading and Preparing Data...")
     try:
-        test_sharpe, test_portfolio, test_log = run_improved_simulation(test_df, best_params)
+        df = pd.read_csv('data/daily_data.csv', index_col=0, parse_dates=True)
+        with open('data/collected_data.pkl', 'rb') as f:
+            collected_data = pickle.load(f)
+        msft_earnings_df = collected_data.get('fundamental', {}).get('MSFT_EARNINGS', pd.DataFrame())
+        df = add_fundamental_indicators_to_data(df, msft_earnings_df)
+        print(f"Data loaded successfully. Shape: {df.shape}")
+    except FileNotFoundError:
+        print("ERROR: Data files not found. Please run collection and preparation scripts.")
+        sys.exit()
 
-        # Performance Metrics
+    # --- 2. Split Data ---
+    train_size = int(len(df) * 0.8)
+    train_df = df.iloc[:train_size]
+    test_df = df.iloc[train_size:]
+    print(f"\nTraining data: {len(train_df)} samples | Testing data: {len(test_df)} samples")
+
+    # --- PART 1: TEST INDICATORS IN ISOLATION ---
+    print("\n" + "=" * 60)
+    print("PART 1: TESTING INDICATORS IN ISOLATION")
+    print("=" * 60)
+
+    single_indicator_params = {
+        'initial_capital': 100000.0, 'transaction_fee': 5.0, 'lambda_worst': 1.5,
+        'price_column': 'MSFT_close', 'volume_column': 'MSFT_volume',
+        'sma_short_window': 20, 'sma_long_window': 100,
+        'ema_short_window': 12, 'ema_long_window': 26,
+        'rsi_window': 14, 'macd_fast': 12, 'macd_slow': 26, 'macd_signal': 9,
+        'bb_window': 20, 'bb_std_dev': 2.0, 'obv_window': 20,
+        'sma_theta_plus': 2.0, 'sma_theta_minus': -2.0,
+        'ema_theta_plus': 0.5, 'ema_theta_minus': -0.5,
+        'rsi_theta_plus': 70, 'rsi_theta_minus': 30,
+        'macd_theta_plus': 0.15, 'macd_theta_minus': -0.15,
+        'obv_theta_plus': 5e7, 'obv_theta_minus': -5e7,
+        'pe_theta_plus': 30, 'pe_theta_minus': 15,
+        'surprise_theta_plus': 5, 'surprise_theta_minus': -5,
+    }
+
+    indicator_names = ['SMA', 'EMA', 'RSI', 'MACD', 'BB', 'OBV', 'PE', 'Surprise']
+    for i, name in enumerate(indicator_names):
+        params = single_indicator_params.copy()
+        params['use_single_indicator'] = i  # Special flag for the simulator
+
+        print(f"\n--- Testing Strategy: {name} ONLY ---")
+        sharpe, portfolio, trade_log = run_improved_simulation(train_df.copy(), params)
+
+        if len(trade_log) > 0:
+            print(f"  SUCCESS: Strategy made {len(trade_log)} trades.")
+            print(f"  Sharpe Ratio: {sharpe:.4f}")
+            print(f"  Final Portfolio Value: ${portfolio.iloc[-1]:,.2f}")
+        else:
+            print(f"  FAILURE: Strategy made 0 trades.")
+
+    # --- PART 2: FULL GRID SEARCH WITH WEIGHTED SUM ---
+    print("\n" + "=" * 60)
+    print("PART 2: FULL GRID SEARCH WITH WEIGHTED AGGREGATION")
+    print("=" * 60)
+
+    param_grid = {
+        'initial_capital': [100000.0],
+        'transaction_fee': [5.0],
+        'lambda_worst': [1.5],
+        'price_column': ['MSFT_close'],
+        'volume_column': ['MSFT_volume'],
+        'aggregation_method': ['weighted_sum'],
+
+        # More weight combinations to test
+        'signal_weights': [
+            [2.0, 2.0, 1.5, 1.0, 0.5, 1.0, 0.5, 0.5],  # Trend-focused
+            [1.0, 1.0, 2.0, 1.5, 1.0, 1.5, 0.5, 0.5],  # Momentum-focused
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # Equal weights
+        ],
+
+        # Expanded window sizes
+        'sma_short_window': [10, 20, 50],
+        'sma_long_window': [100, 150, 200],
+        'ema_short_window': [12, 20],
+        'ema_long_window': [26, 50],
+        'rsi_window': [14, 21],
+        'obv_window': [20, 30],
+
+        # Expanded thresholds based on our analysis
+        'sma_theta_plus': [1.0, 2.0],
+        'sma_theta_minus': [-2.0, -1.0],
+        'ema_theta_plus': [0.25, 0.5],
+        'ema_theta_minus': [-0.5, -0.25],
+        'rsi_theta_plus': [65, 70],
+        'rsi_theta_minus': [30, 35],
+        'macd_theta_plus': [0.1, 0.15],
+        'macd_theta_minus': [-0.15, -0.1],
+        'obv_theta_plus': [1e7, 5e7, 1e8],
+        'obv_theta_minus': [-1e8, -5e7, -1e7],
+
+        # Fixed parameters can remain the same
+        'macd_fast': [12], 'macd_slow': [26], 'macd_signal': [9],
+        'bb_window': [20], 'bb_std_dev': [2.0],
+        'pe_theta_plus': [30], 'pe_theta_minus': [15],
+        'surprise_theta_plus': [5], 'surprise_theta_minus': [-5],
+    }
+
+    keys, values = zip(*param_grid.items())
+    valid_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
+    print(f"Generated {len(valid_combinations)} combinations for weighted search.")
+
+    print("\nStarting parallel optimization with batch processing...")
+    best_sharpe = -np.inf
+    best_params = None
+    total_combinations = len(valid_combinations)
+
+    # Store results for analysis
+    results = []
+    start_time = time.time()
+    completed_count = 0
+
+    # Get CPU information and optimize core usage
+    total_cores = multiprocessing.cpu_count()
+    print(f"CPU Information:")
+    print(f"  Total logical cores: {total_cores}")
+    print(f"  Using {total_cores} workers for parallel processing...")
+    print(f"  Processing {total_combinations} combinations in batches...")
+
+    # Process in manageable batches to avoid memory issues
+    batch_size = min(500, total_combinations)  # Process 500 at a time
+    num_batches = (total_combinations + batch_size - 1) // batch_size
+
+    print(f"  Using batch size: {batch_size} ({num_batches} batches)")
+
+    with ProcessPoolExecutor(max_workers=total_cores) as executor:
+        for batch_num in range(num_batches):
+            start_idx = batch_num * batch_size
+            end_idx = min(start_idx + batch_size, total_combinations)
+            batch_combinations = valid_combinations[start_idx:end_idx]
+
+            print(f"\nProcessing batch {batch_num + 1}/{num_batches} ({len(batch_combinations)} combinations)...")
+
+            # Submit batch jobs
+            future_to_params = {
+                executor.submit(run_improved_simulation, train_df.copy(), params): params
+                for params in batch_combinations
+            }
+
+            batch_completed = 0
+            # Process completed jobs in this batch
+            for future in as_completed(future_to_params):
+                params = future_to_params[future]
+                completed_count += 1
+                batch_completed += 1
+
+                try:
+                    sharpe, portfolio_values, trade_log = future.result()
+
+                    # Store result for analysis
+                    results.append({
+                        'params': params,
+                        'sharpe_ratio': sharpe,
+                        'final_value': portfolio_values.iloc[-1] if len(portfolio_values) > 0 else 0,
+                        'total_trades': len(trade_log)
+                    })
+
+                    if len(trade_log) > 0 and sharpe > best_sharpe:
+                        best_sharpe = sharpe
+                        best_params = params
+                        print(
+                            f"NEW BEST | Completed {completed_count}/{total_combinations} | Sharpe: {best_sharpe:.4f}")
+
+                    # Print progress every 50 completed combinations
+                    if completed_count % 50 == 0:
+                        elapsed_time = time.time() - start_time
+                        avg_time_per_combo = elapsed_time / completed_count
+                        estimated_remaining = (total_combinations - completed_count) * avg_time_per_combo
+                        completion_rate = completed_count / elapsed_time * 60  # per minute
+                        if estimated_remaining > 3600:  # More than 1 hour
+                            time_str = f"{estimated_remaining / 3600:.1f} hours"
+                        else:
+                            time_str = f"{estimated_remaining / 60:.1f} min"
+                        print(
+                            f"Completed {completed_count}/{total_combinations} ({completed_count / total_combinations * 100:.2f}%) | "
+                            f"Best Sharpe: {best_sharpe:.4f} | Rate: {completion_rate:.0f}/min | Est. remaining: {time_str}")
+
+                    # Show first completion immediately
+                    elif completed_count == 1:
+                        print(f"First job completed!")
+
+                except Exception as exc:
+                    print(f'Job generated an exception: {exc}')
+
+            print(f"Batch {batch_num + 1} complete ({batch_completed} jobs)")
+
+    print(f"\nOptimization complete! Processed {completed_count}/{total_combinations} combinations.")
+    if (time.time() - start_time) > 3600:
+        print(f"Total time: {(time.time() - start_time) / 3600:.1f} hours")
+    else:
+        print(f"Total time: {(time.time() - start_time) / 60:.1f} minutes")
+
+    print("\n" + "=" * 60)
+    print("OPTIMIZATION RESULTS ON TRAINING DATA")
+    print("=" * 60)
+    if best_params:
+        print(f"Best Sharpe Ratio Found: {best_sharpe:.4f}")
+        print("\nOptimal Parameters:")
+        for key, value in best_params.items():
+            print(f"  {key}: {value}")
+
+        # Comprehensive strategy analysis
+        profitable_strategies = [r for r in results if r['sharpe_ratio'] > 0]
+        print(f"\nStrategy Analysis:")
+        print(f"  Total strategies tested: {len(results)}")
+        print(f"  Profitable strategies: {len(profitable_strategies)}")
+        print(f"  Success rate: {len(profitable_strategies) / len(results) * 100:.1f}%")
+
+        if len(profitable_strategies) > 0:
+            avg_sharpe = np.mean([r['sharpe_ratio'] for r in profitable_strategies])
+            print(f"  Average Sharpe (profitable): {avg_sharpe:.4f}")
+
+        # Run parameter sensitivity analysis
+        analyze_parameter_sensitivity(results)
+
+    else:
+        print("No profitable strategy found. Consider widening parameter ranges or adjusting weights.")
+
+    # =============================================================================
+    # FINAL STEP: EVALUATE THE BEST STRATEGY ON THE TEST SET
+    # =============================================================================
+    if best_params:
+        print("\n" + "=" * 60)
+        print("PART 3: EVALUATING BEST STRATEGY ON TEST DATA")
+        print("=" * 60)
+
+        # Run the simulation on the test data using the best parameters
+        test_sharpe, test_portfolio, test_log = run_improved_simulation(test_df.copy(), best_params)
+
+        # --- Performance Metrics Calculation ---
+        print("\n--- Test Set Performance Metrics ---")
+
+        # 1. Cumulative Return
+        cumulative_return = (test_portfolio.iloc[-1] / test_portfolio.iloc[0] - 1) * 100
+        print(f"Cumulative Return: {cumulative_return:.2f}%")
+
+        # 2. Annualized Volatility
         returns = test_portfolio.pct_change().dropna()
-        cum_return = (test_portfolio.iloc[-1] / test_portfolio.iloc[0] - 1) * 100
-        volatility = returns.std() * np.sqrt(252) * 100
+        annualized_volatility = returns.std() * np.sqrt(252) * 100
+        print(f"Annualized Volatility: {annualized_volatility:.2f}%")
 
-        # Calculate Drawdown
-        rolling_max = test_portfolio.cummax()
-        drawdown = ((rolling_max - test_portfolio) / rolling_max).max() * 100
-
+        # 3. Sharpe Ratio
         print(f"Sharpe Ratio: {test_sharpe:.4f}")
-        print(f"Cumulative Return: {cum_return:.2f}%")
-        print(f"Annualized Volatility: {volatility:.2f}%")
-        print(f"Maximum Drawdown: {drawdown:.2f}%")
+
+        # 4. Maximum Drawdown
+        rolling_max = test_portfolio.cummax()
+        drawdown = (test_portfolio - rolling_max) / rolling_max
+        max_drawdown = drawdown.min() * 100
+        print(f"Maximum Drawdown: {max_drawdown:.2f}%")
+
+        # 5. Total Trades
         print(f"Total Trades: {len(test_log)}")
 
-        # --- 6. Visualization ---
-        print("\nGenerating plots...")
+        # Enhanced visualization with moving averages
+        import matplotlib.pyplot as plt
         plt.style.use('dark_background')
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), gridspec_kw={'height_ratios': [2, 1]})
 
-        # Plot 1: Portfolio Value and Trades
-        ax1.plot(test_portfolio.index, test_portfolio, color='cyan', label='Portfolio Value')
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), gridspec_kw={'height_ratios': [2, 1]})
+        fig.suptitle('Strategy Performance on Test Set', fontsize=16)
+
+        # Plot 1: Portfolio Value Over Time
+        ax1.plot(test_portfolio.index, test_portfolio, label='Portfolio Value', color='cyan')
         ax1.set_title(
-            f'Portfolio Performance on Test Set | Sharpe: {test_sharpe:.2f} | Return: {cum_return:.2f}% | Drawdown: {drawdown:.2f}%')
+            f'Portfolio Performance | Sharpe: {test_sharpe:.2f} | Return: {cumulative_return:.2f}% | Drawdown: {max_drawdown:.2f}%')
         ax1.set_ylabel('Portfolio Value ($)')
         ax1.grid(True, linestyle='--', alpha=0.5)
 
-        # Plot trade markers
+        # Plot Buy/Sell signals on the portfolio chart
         buy_signals = [trade for trade in test_log if 'open_long' in trade['action']]
         sell_signals = [trade for trade in test_log if 'open_short' in trade['action']]
 
-        ax1.plot([trade['date'] for trade in buy_signals],
-                 [trade['price'] for trade in buy_signals],
-                 '^', color='lime', markersize=8, label='Buy Signal')
-
-        ax1.plot([trade['date'] for trade in sell_signals],
-                 [trade['price'] for trade in sell_signals],
-                 'v', color='red', markersize=8, label='Sell Signal')
+        if buy_signals:
+            ax1.plot([trade['date'] for trade in buy_signals],
+                     [test_portfolio.loc[trade['date']] for trade in buy_signals],
+                     '^', color='lime', markersize=8, label='Buy Signal')
+        if sell_signals:
+            ax1.plot([trade['date'] for trade in sell_signals],
+                     [test_portfolio.loc[trade['date']] for trade in sell_signals],
+                     'v', color='red', markersize=8, label='Sell Signal')
         ax1.legend()
 
-        # Plot 2: Stock Price with Moving Averages
+        # Plot 2: Stock Price with Moving Averages and Entry/Exit Points
         price_col = best_params.get('price_column', 'MSFT_close')
-        ax2.plot(test_df.index, test_df[price_col], color='white', label='MSFT Price', alpha=0.9)
+        ax2.plot(test_df.index, test_df[price_col], label='MSFT Price', color='white', alpha=0.9)
 
+        # Add moving averages
         sma_short = calculate_sma(test_df[price_col], best_params['sma_short_window'])
         sma_long = calculate_sma(test_df[price_col], best_params['sma_long_window'])
 
         ax2.plot(sma_short.index, sma_short, color='orange', label=f"SMA({best_params['sma_short_window']})")
         ax2.plot(sma_long.index, sma_long, color='magenta', label=f"SMA({best_params['sma_long_window']})")
 
+        if buy_signals:
+            ax2.plot([trade['date'] for trade in buy_signals],
+                     [trade['price'] for trade in buy_signals],
+                     '^', color='lime', markersize=8)
+        if sell_signals:
+            ax2.plot([trade['date'] for trade in sell_signals],
+                     [trade['price'] for trade in sell_signals],
+                     'v', color='red', markersize=8)
+
+        ax2.set_title('Stock Price with Moving Averages and Trade Entry Points')
         ax2.set_ylabel('Stock Price ($)')
         ax2.set_xlabel('Date')
         ax2.grid(True, linestyle='--', alpha=0.5)
         ax2.legend()
 
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
 
-    except Exception as e:
-        print(f"An error occurred during test evaluation: {e}")
 
-print("\n" + "=" * 60)
-print("EXECUTION COMPLETE")
-print("=" * 60)
+if __name__ == '__main__':
+    main()
