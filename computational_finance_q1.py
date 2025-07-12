@@ -13,9 +13,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from improved_simulator import run_improved_simulation
 from fundamental_indicators import add_fundamental_indicators_to_data
 from indicators import calculate_sma
-from crossover_indicator_generator import add_all_crossover_indicators
 
 
+# =============================================================================
+# Helper Function for Parameter Sensitivity Analysis
+# =============================================================================
 def analyze_parameter_sensitivity(results):
     """
     Analyze which parameters have the most impact on performance by correlating
@@ -96,13 +98,10 @@ def main():
         'ema_theta_plus': 0.5, 'ema_theta_minus': -0.5,
         'rsi_theta_plus': 70, 'rsi_theta_minus': 30,
         'macd_theta_plus': 0.15, 'macd_theta_minus': -0.15,
-        'obv_theta_plus': 0.003, 'obv_theta_minus': -0.003,
+        'obv_theta_plus': 5e7, 'obv_theta_minus': -5e7,
         'pe_theta_plus': 30, 'pe_theta_minus': 15,
         'surprise_theta_plus': 5, 'surprise_theta_minus': -5,
     }
-
-    # Add crossover indicators for testing
-    train_test_df = add_all_crossover_indicators(train_df.copy(), single_indicator_params)
 
     indicator_names = ['SMA', 'EMA', 'RSI', 'MACD', 'BB', 'OBV', 'PE', 'Surprise']
     for i, name in enumerate(indicator_names):
@@ -110,7 +109,7 @@ def main():
         params['use_single_indicator'] = i  # Special flag for the simulator
 
         print(f"\n--- Testing Strategy: {name} ONLY ---")
-        sharpe, portfolio, trade_log = run_improved_simulation(train_test_df.copy(), params)
+        sharpe, portfolio, trade_log = run_improved_simulation(train_df.copy(), params)
 
         if len(trade_log) > 0:
             print(f"  SUCCESS: Strategy made {len(trade_log)} trades.")
@@ -132,37 +131,34 @@ def main():
         'volume_column': ['MSFT_volume'],
         'aggregation_method': ['weighted_sum'],
 
-        # Updated weight combinations to include OBV
+        # More weight combinations to test
         'signal_weights': [
-            [2.0, 2.0, 1.5, 1.0, 0.5, 1.5, 0.5, 0.5],  # Trend-focused (high OBV weight)
-            [1.0, 1.0, 2.0, 1.5, 1.0, 1.0, 0.5, 0.5],  # Momentum-focused
-            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # Equal weights
-            [1.5, 1.5, 0.5, 0.5, 0.5, 2.0, 1.0, 1.0],  # Volume/fundamental focused
+            [2.0, 2.0, 1.5, 1.0, 0.5, 1.0, 0.5, 0.5],  # Trend-focused
+            [1.0, 1.0, 2.0, 1.5, 1.0, 1.5, 0.5, 0.5],  # Momentum-focused
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # Equal weights
         ],
 
         # Expanded window sizes
-        'sma_short_window': [10, 50],
-        'sma_long_window': [100, 200],
+        'sma_short_window': [10, 20, 50],
+        'sma_long_window': [100, 150, 200],
         'ema_short_window': [12, 20],
         'ema_long_window': [26, 50],
         'rsi_window': [14, 21],
-        'obv_window': [10, 30],  # OBV trend calculation window
+        'obv_window': [20, 30],
 
-        # Expanded thresholds
+        # Expanded thresholds based on our analysis
         'sma_theta_plus': [1.0, 2.0],
         'sma_theta_minus': [-2.0, -1.0],
         'ema_theta_plus': [0.25, 0.5],
         'ema_theta_minus': [-0.5, -0.25],
-        'rsi_theta_plus': [70, 90],
-        'rsi_theta_minus': [15, 30],
+        'rsi_theta_plus': [65, 70],
+        'rsi_theta_minus': [30, 35],
         'macd_theta_plus': [0.1, 0.15],
         'macd_theta_minus': [-0.15, -0.1],
+        'obv_theta_plus': [1e7, 5e7, 1e8],
+        'obv_theta_minus': [-1e8, -5e7, -1e7],
 
-        # OBV trend slope thresholds (percentage slope per period) - ADJUSTED
-        'obv_theta_plus': [0.002, 0.005],  # More sensitive thresholds
-        'obv_theta_minus': [-0.005, -0.002],  # More sensitive thresholds
-
-        # Fixed parameters
+        # Fixed parameters can remain the same
         'macd_fast': [12], 'macd_slow': [26], 'macd_signal': [9],
         'bb_window': [20], 'bb_std_dev': [2.0],
         'pe_theta_plus': [30], 'pe_theta_minus': [15],
@@ -191,7 +187,7 @@ def main():
     print(f"  Processing {total_combinations} combinations in batches...")
 
     # Process in manageable batches to avoid memory issues
-    batch_size = min(500, total_combinations)
+    batch_size = min(500, total_combinations)  # Process 500 at a time
     num_batches = (total_combinations + batch_size - 1) // batch_size
 
     print(f"  Using batch size: {batch_size} ({num_batches} batches)")
@@ -204,12 +200,9 @@ def main():
 
             print(f"\nProcessing batch {batch_num + 1}/{num_batches} ({len(batch_combinations)} combinations)...")
 
-            # Add crossover indicators to training data for this batch
-            batch_train_df = add_all_crossover_indicators(train_df.copy(), batch_combinations[0])
-
             # Submit batch jobs
             future_to_params = {
-                executor.submit(run_improved_simulation, batch_train_df.copy(), params): params
+                executor.submit(run_improved_simulation, train_df.copy(), params): params
                 for params in batch_combinations
             }
 
@@ -237,19 +230,21 @@ def main():
                         print(
                             f"NEW BEST | Completed {completed_count}/{total_combinations} | Sharpe: {best_sharpe:.4f}")
 
-                    # Progress reporting
+                    # Print progress every 50 completed combinations
                     if completed_count % 50 == 0:
                         elapsed_time = time.time() - start_time
                         avg_time_per_combo = elapsed_time / completed_count
                         estimated_remaining = (total_combinations - completed_count) * avg_time_per_combo
-                        completion_rate = completed_count / elapsed_time * 60
-                        if estimated_remaining > 3600:
+                        completion_rate = completed_count / elapsed_time * 60  # per minute
+                        if estimated_remaining > 3600:  # More than 1 hour
                             time_str = f"{estimated_remaining / 3600:.1f} hours"
                         else:
                             time_str = f"{estimated_remaining / 60:.1f} min"
                         print(
                             f"Completed {completed_count}/{total_combinations} ({completed_count / total_combinations * 100:.2f}%) | "
                             f"Best Sharpe: {best_sharpe:.4f} | Rate: {completion_rate:.0f}/min | Est. remaining: {time_str}")
+
+                    # Show first completion immediately
                     elif completed_count == 1:
                         print(f"First job completed!")
 
@@ -298,13 +293,10 @@ def main():
         print("PART 3: EVALUATING BEST STRATEGY ON TEST DATA")
         print("=" * 60)
 
-        # Add crossover indicators to test data
-        test_df_with_indicators = add_all_crossover_indicators(test_df.copy(), best_params)
-
         # Run the simulation on the test data using the best parameters
-        test_sharpe, test_portfolio, test_log = run_improved_simulation(test_df_with_indicators.copy(), best_params)
+        test_sharpe, test_portfolio, test_log = run_improved_simulation(test_df.copy(), best_params)
 
-        # Performance Metrics Calculation
+        # --- Performance Metrics Calculation ---
         print("\n--- Test Set Performance Metrics ---")
 
         # 1. Cumulative Return
@@ -384,17 +376,6 @@ def main():
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
-
-        # Print OBV-specific analysis if OBV had significant weight
-        obv_weight = best_params.get('signal_weights', [1] * 8)[5] if len(
-            best_params.get('signal_weights', [])) > 5 else 1
-        if obv_weight > 1.0:
-            print(f"\n--- OBV Analysis ---")
-            print(f"OBV Weight in Best Strategy: {obv_weight}")
-            print(f"OBV Window: {best_params.get('obv_window', 20)}")
-            print(
-                f"OBV Trend Thresholds: +{best_params.get('obv_theta_plus', 0.05):.3f}, {best_params.get('obv_theta_minus', -0.05):.3f}")
-            print("OBV successfully contributed to trend confirmation and divergence detection.")
 
 
 if __name__ == '__main__':
