@@ -1,61 +1,71 @@
-    param_grid = {
-        # --- Core simulation parameters (fixed) ---
-        'initial_capital': [100000.0],
-        'transaction_fee': [5.0],
-        'lambda_worst': [1.5],
-        'price_column': ['MSFT_close'],
-        'volume_column': ['MSFT_volume'],
-        'aggregation_method': ['weighted_sum'],
+============================================================
+COMPUTATIONAL FINANCE - QUESTION 1 IMPLEMENTATION (OPTIMIZED & FIXED)
+============================================================
 
-        # --- STRATEGIC CHANGE: Test hypotheses based on isolated indicator performance ---
-        # Order: [SMA, EMA, RSI, MACD, BB, OBV, PE, Surprise]
-        'signal_weights': [
-            # Hypothesis 1: Trust the winners. High weight on SMA, RSI, BB. Low/zero on others.
-            [2.0, 0.5, 2.5, 0.5, 2.0, 0.5, 0.25, 0.25],
+Loading and Preparing Data...
+Successfully added P/E Ratio and truly discrete Earnings Surprise for Q1.
+Total trading days: 3651
+Days with earnings announcements (surprise != 0): 57
+Percentage of days with earnings signals: 1.56%
+Data loaded successfully. Shape: (3651, 16)
+Memory usage: 0.38 MB
 
-            # Hypothesis 2: Winners only. Turn off the historically losing indicators.
-            [1.0, 0.0, 1.5, 0.0, 1.0, 0.0, 0.5, 0.5],
+Training data: 2920 samples | Testing data: 731 samples
 
-            # Hypothesis 3: Mean-reversion focus. RSI and BB are the primary drivers.
-            [0.5, 0.0, 2.5, 0.0, 2.5, 0.0, 0.5, 0.0],
-        ],
+============================================================
+PART 1: TESTING INDICATORS IN ISOLATION
+============================================================
 
-        # --- Focus search on the best indicators (SMA, RSI, BB) ---
-        'sma_short_window': [10, 20],
-        'sma_long_window': [50, 100, 150],
-        'rsi_window': [14, 21],  # RSI was the star performer
-        'rsi_theta_plus': [65, 70, 75],
-        'rsi_theta_minus': [25, 30, 35],
-        'bb_window': [20, 30],
-        'bb_std_dev': [2.0, 2.5],
-        'bb_theta_plus': [0.9, 0.95],
-        'bb_theta_minus': [0.05, 0.1],
+--- Testing Strategy: SMA ONLY ---
+  SUCCESS: Strategy made 56 trades.
+  Sharpe Ratio: 0.4655
+  Final Portfolio Value: $111,139.28
 
-        # --- Keep a minimal search for weaker/riskier indicators ---
-        'ema_short_window': [12],
-        'ema_long_window': [26],
-        'macd_fast': [12],
-        'macd_slow': [26],
-        'macd_signal': [9],
-        'obv_window': [20, 40],
-        'obv_theta_plus': [0.003],
-        'obv_theta_minus': [-0.003],
+--- Testing Strategy: EMA ONLY ---
+  SUCCESS: Strategy made 200 trades.
+  Sharpe Ratio: -0.2483
+  Final Portfolio Value: $89,097.41
 
-        # --- CRITICAL FIX: Make the PE Ratio much more conservative to avoid blowing up the account ---
-        'pe_theta_plus': [40, 50],  # Sell signal (overvalued) only when PE is very high
-        'pe_theta_minus': [10],  # Buy signal (undervalued) only when PE is very low
-        'surprise_theta_plus': [10],  # Only act on significant surprises
-        'surprise_theta_minus': [-10],
-    }
-Progress: 20700/20736 (99.83%) | Best Sharpe: 0.6250 | Rate: 25560/min | Est. Left: 0.0 min
+--- Testing Strategy: RSI ONLY ---
+  SUCCESS: Strategy made 388 trades.
+  Sharpe Ratio: 0.5575
+  Final Portfolio Value: $178,042.73
 
-Optimization complete! Processed 20736/20736 combinations.
-Total time: 0.82 minutes
+--- Testing Strategy: MACD ONLY ---
+  SUCCESS: Strategy made 508 trades.
+  Sharpe Ratio: -0.0517
+  Final Portfolio Value: $94,957.39
+
+--- Testing Strategy: BB ONLY ---
+  SUCCESS: Strategy made 302 trades.
+  Sharpe Ratio: 0.5346
+  Final Portfolio Value: $151,728.57
+
+--- Testing Strategy: OBV ONLY ---
+  SUCCESS: Strategy made 231 trades.
+  Sharpe Ratio: -0.0812
+  Final Portfolio Value: $72,276.84
+
+--- Testing Strategy: PE ONLY ---
+  SUCCESS: Strategy made 1 trades.
+  Sharpe Ratio: 0.4892
+  Final Portfolio Value: $-343,910.55
+
+--- Testing Strategy: Surprise ONLY ---
+  SUCCESS: Strategy made 76 trades.
+  Sharpe Ratio: -0.3948
+  Final Portfolio Value: $92,318.12
+
+
+Progress: 248800/248832 (99.99%) | Best Sharpe: 0.8732 | Rate: 28836/min | Est. Left: 0.0 min
+
+Optimization complete! Processed 248832/248832 combinations.
+Total time: 8.63 minutes
 
 ============================================================
 OPTIMIZATION RESULTS ON TRAINING DATA
 ============================================================
-Best Sharpe Ratio Found: 0.6250
+Best Sharpe Ratio Found: 0.8732
 
 Optimal Parameters:
   initial_capital: 100000.0
@@ -64,14 +74,15 @@ Optimal Parameters:
   price_column: MSFT_close
   volume_column: MSFT_volume
   aggregation_method: weighted_sum
-  signal_weights: [2.0, 0.5, 2.5, 0.5, 2.0, 0.5, 0.25, 0.25]
+  bb_method: breach
+  signal_weights: [1.0, 0.5, 1.5, 0.5, 1.5, 0.5, 0.5, 0.5]
   sma_short_window: 20
   sma_long_window: 150
-  rsi_window: 14
-  rsi_theta_plus: 75
-  rsi_theta_minus: 35
+  rsi_window: 12
+  rsi_theta_plus: 80
+  rsi_theta_minus: 30
   bb_window: 20
-  bb_std_dev: 2.5
+  bb_std_dev: 2.0
   bb_theta_plus: 0.95
   bb_theta_minus: 0.05
   ema_short_window: 12
@@ -80,12 +91,12 @@ Optimal Parameters:
   macd_slow: 26
   macd_signal: 9
   obv_window: 20
-  obv_theta_plus: 0.003
-  obv_theta_minus: -0.003
+  obv_theta_plus: 0.002
+  obv_theta_minus: -0.005
   pe_theta_plus: 50
-  pe_theta_minus: 10
-  surprise_theta_plus: 10
-  surprise_theta_minus: -10
+  pe_theta_minus: 8
+  surprise_theta_plus: 8
+  surprise_theta_minus: -15
 /usr/local/lib/python3.11/dist-packages/numpy/lib/_function_base_impl.py:2922: RuntimeWarning: invalid value encountered in divide
   c /= stddev[:, None]
 /usr/local/lib/python3.11/dist-packages/numpy/lib/_function_base_impl.py:2923: RuntimeWarning: invalid value encountered in divide
@@ -96,36 +107,36 @@ Parameter Sensitivity Analysis (Correlation with Sharpe Ratio):
 initial_capital          :      nan
 transaction_fee          :      nan
 lambda_worst             :      nan
-rsi_window               :  -0.4256
-bb_theta_minus           :   0.2416
-rsi_theta_minus          :   0.2358
-rsi_theta_plus           :   0.2092
+rsi_window               :  -0.5134
+rsi_theta_minus          :   0.4272
+bb_std_dev               :  -0.2282
 ema_short_window         :      nan
 ema_long_window          :      nan
 macd_fast                :      nan
 macd_slow                :      nan
 macd_signal              :      nan
-obv_window               :  -0.2234
-bb_std_dev               :  -0.0679
-bb_window                :   0.0609
-obv_theta_plus           :      nan
-obv_theta_minus          :      nan
-pe_theta_plus            :   0.2704
-sma_long_window          :   0.1656
-sma_short_window         :  -0.0784
-bb_theta_plus            :   0.0505
-pe_theta_minus           :      nan
-surprise_theta_plus      :      nan
-surprise_theta_minus     :      nan
+obv_theta_plus           :  -0.2915
+pe_theta_plus            :   0.1863
+rsi_theta_plus           :   0.1766
+obv_theta_minus          :  -0.1728
+bb_window                :   0.1161
+obv_window               :   0.0923
+sma_short_window         :   0.0241
+surprise_theta_plus      :  -0.0027
+sma_long_window          :   0.0024
+bb_theta_minus           :   0.0000
+bb_theta_plus            :   0.0000
+pe_theta_minus           :  -0.0000
+surprise_theta_minus     :  -0.0000
 ============================================================
 
 ============================================================
-PART 3: EVALUATING BEST STRATEGY ON TEST DATA
+FINAL EVALUATION: TRAINING VS TEST PERFORMANCE
 ============================================================
 
 --- Test Set Performance Metrics ---
-Cumulative Return: 23.71%
-Annualized Volatility: 23.17%
-Sharpe Ratio: 0.4325
-Maximum Drawdown: -25.90%
-Total Trades: 343
+Cumulative Return: 73.22%
+Annualized Volatility: 17.60%
+Sharpe Ratio: 1.1653
+Maximum Drawdown: -9.96%
+Total Trades: 301

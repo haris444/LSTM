@@ -58,7 +58,7 @@ def calculate_earnings_surprise(actual_earnings, expected_earnings):
 def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close'):
     """
     Add fundamental indicators to the main dataset using real earnings data.
-    FIXED: Earnings Surprise is now discrete for Question 1 requirements.
+    FIXED: Earnings Surprise is now truly discrete for Question 1 requirements.
     """
     if earnings_df.empty:
         print("Warning: Earnings data is empty. Skipping fundamental indicators.")
@@ -66,17 +66,18 @@ def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close
         df['Earnings_Surprise'] = 0
         return df
 
-    # 1. Calculate P/E Ratio (unchanged)
+    # 1. Calculate P/E Ratio (unchanged - this can be forward-filled)
     df['PE_Ratio'] = calculate_pe_ratio(df[price_column], earnings_df)
 
-    # 2. Calculate Earnings Surprise - FIXED FOR Q1
+    # 2. Calculate Earnings Surprise - TRULY DISCRETE FOR Q1
     historical_eps = earnings_df['eps'].tolist()
     reporting_dates = earnings_df['date'].tolist()
 
-    # Initialize all dates with 0 (neutral signal)
+    # Initialize ALL dates with 0 (neutral signal) - this is the key difference
     surprise_series = pd.Series(index=df.index, dtype=float, data=0.0)
 
     # Only set surprise values on actual earnings announcement dates
+    # NO forward-filling or persistence - signal is only active on announcement day
     for i in range(len(historical_eps)):
         if i >= 4:  # Need enough data for forecast
             expected_eps = estimate_earnings_with_model(historical_eps[:i])[0]
@@ -86,16 +87,36 @@ def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close
             # Find the exact date or closest date in our dataset
             report_date = reporting_dates[i]
             if report_date in df.index:
-                # Exact match - use this date
+                # Exact match - ONLY this date gets the signal
                 surprise_series.loc[report_date] = surprise
             else:
-                # Find closest trading day
+                # Find closest trading day - ONLY this day gets the signal
                 closest_idx = df.index.get_indexer([report_date], method='nearest')[0]
                 closest_date = df.index[closest_idx]
                 surprise_series.loc[closest_date] = surprise
 
+    # CRITICAL: Do NOT forward-fill for Question 1
+    # The signal should be 0 on all days except announcement days
     df['Earnings_Surprise'] = surprise_series
 
-    print("Successfully added P/E Ratio and discrete Earnings Surprise for Q1.")
-    print(f"Earnings announcements with surprise != 0: {(surprise_series != 0).sum()}")
+    print("Successfully added P/E Ratio and truly discrete Earnings Surprise for Q1.")
+    print(f"Total trading days: {len(df)}")
+    print(f"Days with earnings announcements (surprise != 0): {(surprise_series != 0).sum()}")
+    print(f"Percentage of days with earnings signals: {(surprise_series != 0).sum() / len(df) * 100:.2f}%")
+
+    return df
+
+
+# Additional function for Question 2 where forward-filling is allowed
+def add_fundamental_indicators_to_data_q2(df, earnings_df, price_column='MSFT_close'):
+    """
+    Version for Question 2 where forward-filling earnings surprise is acceptable.
+    """
+    # Same as above, but with forward-filling
+    df = add_fundamental_indicators_to_data(df, earnings_df, price_column)
+
+    # For Q2: Forward-fill the earnings surprise signal
+    df['Earnings_Surprise'] = df['Earnings_Surprise'].replace(0, np.nan).ffill().fillna(0)
+
+    print("Applied forward-filling for Question 2 implementation.")
     return df

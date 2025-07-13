@@ -54,6 +54,7 @@ def calculate_obv(price_series, volume_series):
     return obv
 
 
+# NEW BOLLINGER BANDS SIGNAL FUNCTIONS
 def generate_bollinger_band_signals(price_series, bb_upper, bb_lower):
     """
     Generate mean-reversion signals based on Bollinger Band breaches.
@@ -66,7 +67,7 @@ def generate_bollinger_band_signals(price_series, bb_upper, bb_lower):
     Returns:
         pd.Series with:
         +1: Price crosses below lower band (oversold, buy signal)
-        -1: Price crosses above upper band (overbought, sell signal)  
+        -1: Price crosses above upper band (overbought, sell signal)
         0: Price within bands or no clear signal
     """
     signals = pd.Series(0, index=price_series.index)
@@ -75,7 +76,7 @@ def generate_bollinger_band_signals(price_series, bb_upper, bb_lower):
     oversold_cross = (price_series < bb_lower) & (price_series.shift(1) >= bb_lower.shift(1))
     signals[oversold_cross] = 1
 
-    # Overbought condition: Price crosses above upper band  
+    # Overbought condition: Price crosses above upper band
     overbought_cross = (price_series > bb_upper) & (price_series.shift(1) <= bb_upper.shift(1))
     signals[overbought_cross] = -1
 
