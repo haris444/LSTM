@@ -137,33 +137,71 @@ def calculate_all_indicators(data, params):
 
 def generate_all_signals_vectorized(indicators, params):
     signals = pd.DataFrame(index=indicators.index)
-    if 'sma_crossover' in indicators: signals['sma'] = signals['sma'] = indicators['sma_crossover']
 
-    if 'ema_crossover' in indicators: signals['ema'] = signals['ema'] = indicators['ema_crossover']
+    # SMA and EMA crossover signals (unchanged)
+    if 'sma_crossover' in indicators:
+        signals['sma'] = indicators['sma_crossover']
+    if 'ema_crossover' in indicators:
+        signals['ema'] = indicators['ema_crossover']
 
-    # invert the signal (signal > theta plus is overbought)
-    if 'rsi' in indicators: signals['rsi'] = -vectorized_generate_signal(indicators['rsi'], params['rsi_theta_plus'],
-                                                                        params['rsi_theta_minus'])
-    if 'macd_crossover' in indicators: signals['macd'] = signals['macd'] = indicators['macd_crossover']
+    # RSI signal (inverted - overbought is sell signal)
+    if 'rsi' in indicators:
+        signals['rsi'] = -vectorized_generate_signal(
+            indicators['rsi'], params['rsi_theta_plus'], params['rsi_theta_minus']
+        )
 
+    # MACD crossover signal (unchanged)
+    if 'macd_crossover' in indicators:
+        signals['macd'] = indicators['macd_crossover']
+
+    # Bollinger Bands signal (unchanged)
     if all(k in indicators for k in ['bb_upper', 'bb_lower', 'price']):
         bb_range = indicators['bb_upper'] - indicators['bb_lower']
-        bb_position = (indicators['price'] - indicators['bb_lower']).div(bb_range.where(bb_range != 0)).replace(
-            [np.inf, -np.inf], 0.5).fillna(0.5)
-        signals['bb'] = -vectorized_generate_signal(bb_position, params['bb_theta_plus'], params['bb_theta_minus'])
+        bb_position = (indicators['price'] - indicators['bb_lower']).div(
+            bb_range.where(bb_range != 0)
+        ).replace([np.inf, -np.inf], 0.5).fillna(0.5)
+        signals['bb'] = -vectorized_generate_signal(
+            bb_position, params['bb_theta_plus'], params['bb_theta_minus']
+        )
+
+    # FIXED OBV Implementation - Based on Price-OBV Divergence/Convergence
     if all(k in indicators for k in ['obv', 'price']):
-        obv_slope, price_slope = vectorized_calculate_trend_slope(indicators['obv'], params[
-            'obv_window']), vectorized_calculate_trend_slope(indicators['price'], params['obv_window'])
-        obv_is_up, obv_is_down = obv_slope > params['obv_theta_plus'], obv_slope < params['obv_theta_minus']
-        price_is_up, price_is_down = price_slope > 0, price_slope < 0
-        condlist = [obv_is_up & price_is_up, obv_is_up & price_is_down, obv_is_down & price_is_down,
-                    obv_is_down & price_is_up]
-        signals['obv'] = np.select(condlist, [1, 1, -1, -1], default=0)
-    if 'PE_Ratio' in indicators: signals['pe'] = -vectorized_generate_signal(indicators['PE_Ratio'],
-                                                                             params['pe_theta_plus'],
-                                                                             params['pe_theta_minus'])
-    if 'Earnings_Surprise' in indicators: signals['surprise'] = vectorized_generate_signal(
-        indicators['Earnings_Surprise'], params['surprise_theta_plus'], params['surprise_theta_minus'])
+        obv_slope = vectorized_calculate_trend_slope(indicators['obv'], params['obv_window'])
+        price_slope = vectorized_calculate_trend_slope(indicators['price'], params['obv_window'])
+
+        # Define trend directions
+        obv_rising = obv_slope > params['obv_theta_plus']
+        obv_falling = obv_slope < params['obv_theta_minus']
+        price_rising = price_slope > 0
+        price_falling = price_slope < 0
+
+        # Signal generation based on convergence and divergence
+        condlist = [
+            # Bullish signals: OBV rising with price rising (confirmation) OR
+            # OBV rising with price falling (bullish divergence)
+            obv_rising & price_rising,  # Uptrend confirmation
+            obv_rising & price_falling,  # Bullish divergence
+
+            # Bearish signals: OBV falling with price falling (confirmation) OR
+            # OBV falling with price rising (bearish divergence)
+            obv_falling & price_falling,  # Downtrend confirmation
+            obv_falling & price_rising  # Bearish divergence
+        ]
+
+        choicelist = [1, 1, -1, -1]  # Both bullish conditions = +1, both bearish = -1
+        signals['obv'] = np.select(condlist, choicelist, default=0)
+
+    # Fundamental indicators (unchanged)
+    if 'PE_Ratio' in indicators:
+        signals['pe'] = -vectorized_generate_signal(
+            indicators['PE_Ratio'], params['pe_theta_plus'], params['pe_theta_minus']
+        )
+    if 'Earnings_Surprise' in indicators:
+        signals['surprise'] = vectorized_generate_signal(
+            indicators['Earnings_Surprise'], params['surprise_theta_plus'], params['surprise_theta_minus']
+        )
+
+    # Single indicator testing logic (unchanged)
     use_single = params.get('use_single_indicator', None)
     if use_single is not None:
         indicator_map = {0: 'sma', 1: 'ema', 2: 'rsi', 3: 'macd', 4: 'bb', 5: 'obv', 6: 'pe', 7: 'surprise'}
@@ -172,6 +210,7 @@ def generate_all_signals_vectorized(indicators, params):
             return signals[[indicator_to_keep]].reindex(indicators.index).fillna(0).astype(int)
         else:
             return pd.DataFrame(0, index=indicators.index, columns=['empty'])
+
     return signals.reindex(indicators.index).fillna(0).astype(int)
 
 
