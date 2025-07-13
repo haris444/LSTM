@@ -133,7 +133,7 @@ def main():
     print("=" * 60)
 
     param_grid = {
-        # --- Core simulation parameters (fixed) ---
+        # Core simulation parameters
         'initial_capital': [100000.0],
         'transaction_fee': [5.0],
         'lambda_worst': [1.5],
@@ -141,45 +141,47 @@ def main():
         'volume_column': ['MSFT_volume'],
         'aggregation_method': ['weighted_sum'],
 
-        # --- STRATEGIC CHANGE: Test hypotheses based on isolated indicator performance ---
-        # Order: [SMA, EMA, RSI, MACD, BB, OBV, PE, Surprise]
+        # BB method selection
+        'bb_method': ['breach', 'proximity'],  # Test both approaches
+        'bb_sensitivity': [0.02, 0.05, 0.10],  # Only used for proximity method
+
+        # Strategic weight combinations
         'signal_weights': [
-            # Hypothesis 1: Trust the winners. High weight on SMA, RSI, BB. Low/zero on others.
-            [2.0, 0.5, 2.5, 0.5, 2.0, 0.5, 0.25, 0.25],
-
-            # Hypothesis 2: Winners only. Turn off the historically losing indicators.
-            [1.0, 0.0, 1.5, 0.0, 1.0, 0.0, 0.5, 0.5],
-
-            # Hypothesis 3: Mean-reversion focus. RSI and BB are the primary drivers.
-            [0.5, 0.0, 2.5, 0.0, 2.5, 0.0, 0.5, 0.0],
+            [2.0, 0.5, 2.5, 0.5, 2.0, 0.5, 0.25, 0.25],  # Your best
+            [1.5, 0.2, 3.0, 0.3, 2.5, 0.8, 0.1, 0.1],  # BB-focused
+            [1.0, 0.5, 1.5, 0.5, 1.5, 0.5, 0.5, 0.5],  # Balanced
         ],
 
-        # --- Focus search on the best indicators (SMA, RSI, BB) ---
-        'sma_short_window': [10, 20],
-        'sma_long_window': [50, 100, 150],
-        'rsi_window': [14, 21],  # RSI was the star performer
-        'rsi_theta_plus': [65, 70, 75],
-        'rsi_theta_minus': [25, 30, 35],
-        'bb_window': [20, 30],
-        'bb_std_dev': [2.0, 2.5],
-        'bb_theta_plus': [0.9, 0.95],
-        'bb_theta_minus': [0.05, 0.1],
+        # SMA parameters
+        'sma_short_window': [15, 20, 25],
+        'sma_long_window': [100, 150, 200],
 
-        # --- Keep a minimal search for weaker/riskier indicators ---
+        # RSI parameters (your best performers)
+        'rsi_window': [12, 14, 16],
+        'rsi_theta_plus': [70, 75, 80],
+        'rsi_theta_minus': [20, 25, 30, 35],
+
+        # Bollinger Bands parameters
+        'bb_window': [20, 25],
+        'bb_std_dev': [2.0, 2.5],
+
+        # For original method (when bb_method != 'breach' or 'proximity')
+        'bb_theta_plus': [0.95],  # Keep your successful value as fallback
+        'bb_theta_minus': [0.05],
+
+        # Other indicators (simplified)
         'ema_short_window': [12],
         'ema_long_window': [26],
         'macd_fast': [12],
         'macd_slow': [26],
         'macd_signal': [9],
-        'obv_window': [20, 40],
-        'obv_theta_plus': [0.003],
-        'obv_theta_minus': [-0.003],
-
-        # --- CRITICAL FIX: Make the PE Ratio much more conservative to avoid blowing up the account ---
-        'pe_theta_plus': [40, 50],  # Sell signal (overvalued) only when PE is very high
-        'pe_theta_minus': [10],  # Buy signal (undervalued) only when PE is very low
-        'surprise_theta_plus': [10],  # Only act on significant surprises
-        'surprise_theta_minus': [-10],
+        'obv_window': [14, 20, 30],
+        'obv_theta_plus': [0.002, 0.003, 0.005],
+        'obv_theta_minus': [-0.005, -0.003, -0.002],
+        'pe_theta_plus': [35, 40, 50],
+        'pe_theta_minus': [8, 10, 12],
+        'surprise_theta_plus': [8, 10, 15],
+        'surprise_theta_minus': [-15, -10, -8],
     }
 
     keys, values = zip(*param_grid.items())
@@ -258,10 +260,20 @@ def main():
 
     if best_params:
         print("\n" + "=" * 60)
-        print("PART 3: EVALUATING BEST STRATEGY ON TEST DATA")
+        print("FINAL EVALUATION: TRAINING VS TEST PERFORMANCE")
         print("=" * 60)
 
+        # Re-run on training data with logging for detailed metrics
+        train_df_with_indicators = add_all_crossover_indicators(train_df.copy(), best_params)
+        train_sharpe, train_portfolio, train_log = run_improved_simulation(
+            train_df_with_indicators, best_params, log_trades=True
+        )
+
+        # Run on test data with logging
         test_df_with_indicators = add_all_crossover_indicators(test_df.copy(), best_params)
+        test_sharpe, test_portfolio, test_log = run_improved_simulation(
+            test_df_with_indicators, best_params, log_trades=True
+        )
 
         # FIX: Call with log_trades=True to get the detailed trade log for final analysis.
         test_sharpe, test_portfolio, test_log = run_improved_simulation(test_df_with_indicators, best_params,
