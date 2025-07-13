@@ -142,8 +142,7 @@ def main():
         'aggregation_method': ['weighted_sum'],
 
         # BB method selection
-        'bb_method': ['breach', 'proximity'],  # Test both approaches
-        'bb_sensitivity': [0.02, 0.05, 0.10],  # Only used for proximity method
+        'bb_method': ['breach'],  # Test both approaches
 
         # Strategic weight combinations
         'signal_weights': [
@@ -157,9 +156,9 @@ def main():
         'sma_long_window': [100, 150, 200],
 
         # RSI parameters (your best performers)
-        'rsi_window': [12, 14, 16],
-        'rsi_theta_plus': [70, 75, 80],
-        'rsi_theta_minus': [20, 25, 30, 35],
+        'rsi_window': [12, 14, 21],
+        'rsi_theta_plus': [70, 80],
+        'rsi_theta_minus': [20, 30],
 
         # Bollinger Bands parameters
         'bb_window': [20, 25],
@@ -176,12 +175,12 @@ def main():
         'macd_slow': [26],
         'macd_signal': [9],
         'obv_window': [14, 20, 30],
-        'obv_theta_plus': [0.002, 0.003, 0.005],
-        'obv_theta_minus': [-0.005, -0.003, -0.002],
-        'pe_theta_plus': [35, 40, 50],
-        'pe_theta_minus': [8, 10, 12],
-        'surprise_theta_plus': [8, 10, 15],
-        'surprise_theta_minus': [-15, -10, -8],
+        'obv_theta_plus': [0.002, 0.005],
+        'obv_theta_minus': [-0.005, -0.002],
+        'pe_theta_plus': [75, 130],
+        'pe_theta_minus': [10, 30],
+        'surprise_theta_plus': [20, 25],
+        'surprise_theta_minus': [-20, -35],
     }
 
     keys, values = zip(*param_grid.items())
