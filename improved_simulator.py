@@ -143,7 +143,8 @@ def generate_all_signals_vectorized(indicators, params):
     if 'ema_crossover' in indicators: signals['ema'] = vectorized_generate_signal(indicators['ema_crossover'],
                                                                                   params['ema_theta_plus'],
                                                                                   params['ema_theta_minus'])
-    if 'rsi' in indicators: signals['rsi'] = vectorized_generate_signal(indicators['rsi'], params['rsi_theta_plus'],
+    # invert the signal (signal > theta plus is overbought)
+    if 'rsi' in indicators: signals['rsi'] = -vectorized_generate_signal(indicators['rsi'], params['rsi_theta_plus'],
                                                                         params['rsi_theta_minus'])
     if 'macd_crossover' in indicators: signals['macd'] = vectorized_generate_signal(indicators['macd_crossover'],
                                                                                     params['macd_theta_plus'],
