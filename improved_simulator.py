@@ -1,10 +1,12 @@
-# improved_simulator.py (Optimized with Numba and Hybrid Logging)
 import pandas as pd
 import numpy as np
 from numba import jit
 
-# Assuming these functions exist in your project and are correctly defined.
-from indicators import calculate_rsi, calculate_bollinger_bands, calculate_sma, calculate_obv
+# Import all indicator calculation functions including the new BB signal functions
+from indicators import (
+    calculate_rsi, calculate_bollinger_bands, calculate_sma, calculate_obv,
+    generate_bollinger_band_signals
+)
 from fundamental_indicators import add_fundamental_indicators_to_data
 
 
@@ -136,6 +138,7 @@ def calculate_all_indicators(data, params):
 
 
 def generate_all_signals_vectorized(indicators, params):
+    """Updated function with improved Bollinger Bands implementation"""
     signals = pd.DataFrame(index=indicators.index)
 
     # SMA and EMA crossover signals (unchanged)
@@ -154,41 +157,50 @@ def generate_all_signals_vectorized(indicators, params):
     if 'macd_crossover' in indicators:
         signals['macd'] = indicators['macd_crossover']
 
-    # Bollinger Bands signal (unchanged)
+    # IMPROVED BOLLINGER BANDS Implementation
     if all(k in indicators for k in ['bb_upper', 'bb_lower', 'price']):
-        bb_range = indicators['bb_upper'] - indicators['bb_lower']
-        bb_position = (indicators['price'] - indicators['bb_lower']).div(
-            bb_range.where(bb_range != 0)
-        ).replace([np.inf, -np.inf], 0.5).fillna(0.5)
-        signals['bb'] = -vectorized_generate_signal(
-            bb_position, params['bb_theta_plus'], params['bb_theta_minus']
-        )
 
-    # FIXED OBV Implementation - Based on Price-OBV Divergence/Convergence
+        # Method 1: Direct band breach detection (recommended for assignment)
+        if params.get('bb_method', 'breach') == 'breach':
+            signals['bb'] = generate_bollinger_band_signals(
+                indicators['price'], indicators['bb_upper'], indicators['bb_lower']
+            )
+
+        # Method 2: Proximity-based signals
+        elif params.get('bb_method') == 'proximity':
+            sensitivity = params.get('bb_sensitivity', 0.05)  # 5% of band width
+            signals['bb'] = generate_bollinger_band_signals_alternative(
+                indicators['price'], indicators['bb_upper'], indicators['bb_lower'], sensitivity
+            )
+
+        # Method 3: Original percentage-based approach (fallback)
+        else:
+            bb_range = indicators['bb_upper'] - indicators['bb_lower']
+            bb_position = (indicators['price'] - indicators['bb_lower']).div(
+                bb_range.where(bb_range != 0)
+            ).replace([np.inf, -np.inf], 0.5).fillna(0.5)
+            signals['bb'] = -vectorized_generate_signal(
+                bb_position, params['bb_theta_plus'], params['bb_theta_minus']
+            )
+
+    # Fixed OBV Implementation (from previous fix)
     if all(k in indicators for k in ['obv', 'price']):
         obv_slope = vectorized_calculate_trend_slope(indicators['obv'], params['obv_window'])
         price_slope = vectorized_calculate_trend_slope(indicators['price'], params['obv_window'])
 
-        # Define trend directions
         obv_rising = obv_slope > params['obv_theta_plus']
         obv_falling = obv_slope < params['obv_theta_minus']
         price_rising = price_slope > 0
         price_falling = price_slope < 0
 
-        # Signal generation based on convergence and divergence
         condlist = [
-            # Bullish signals: OBV rising with price rising (confirmation) OR
-            # OBV rising with price falling (bullish divergence)
             obv_rising & price_rising,  # Uptrend confirmation
             obv_rising & price_falling,  # Bullish divergence
-
-            # Bearish signals: OBV falling with price falling (confirmation) OR
-            # OBV falling with price rising (bearish divergence)
             obv_falling & price_falling,  # Downtrend confirmation
             obv_falling & price_rising  # Bearish divergence
         ]
 
-        choicelist = [1, 1, -1, -1]  # Both bullish conditions = +1, both bearish = -1
+        choicelist = [1, 1, -1, -1]
         signals['obv'] = np.select(condlist, choicelist, default=0)
 
     # Fundamental indicators (unchanged)

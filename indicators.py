@@ -1,3 +1,4 @@
+# indicators.py - Updated with Bollinger Bands signal generation
 import pandas as pd
 import numpy as np
 
@@ -51,3 +52,31 @@ def calculate_obv(price_series, volume_series):
     """Calculates On-Balance Volume."""
     obv = (np.sign(price_series.diff()) * volume_series).fillna(0).cumsum()
     return obv
+
+
+def generate_bollinger_band_signals(price_series, bb_upper, bb_lower):
+    """
+    Generate mean-reversion signals based on Bollinger Band breaches.
+
+    Args:
+        price_series: Stock price time series
+        bb_upper: Upper Bollinger Band
+        bb_lower: Lower Bollinger Band
+
+    Returns:
+        pd.Series with:
+        +1: Price crosses below lower band (oversold, buy signal)
+        -1: Price crosses above upper band (overbought, sell signal)  
+        0: Price within bands or no clear signal
+    """
+    signals = pd.Series(0, index=price_series.index)
+
+    # Oversold condition: Price crosses below lower band
+    oversold_cross = (price_series < bb_lower) & (price_series.shift(1) >= bb_lower.shift(1))
+    signals[oversold_cross] = 1
+
+    # Overbought condition: Price crosses above upper band  
+    overbought_cross = (price_series > bb_upper) & (price_series.shift(1) <= bb_upper.shift(1))
+    signals[overbought_cross] = -1
+
+    return signals
