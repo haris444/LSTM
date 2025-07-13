@@ -137,18 +137,15 @@ def calculate_all_indicators(data, params):
 
 def generate_all_signals_vectorized(indicators, params):
     signals = pd.DataFrame(index=indicators.index)
-    if 'sma_crossover' in indicators: signals['sma'] = vectorized_generate_signal(indicators['sma_crossover'],
-                                                                                  params['sma_theta_plus'],
-                                                                                  params['sma_theta_minus'])
-    if 'ema_crossover' in indicators: signals['ema'] = vectorized_generate_signal(indicators['ema_crossover'],
-                                                                                  params['ema_theta_plus'],
-                                                                                  params['ema_theta_minus'])
+    if 'sma_crossover' in indicators: signals['sma'] = signals['sma'] = indicators['sma_crossover']
+
+    if 'ema_crossover' in indicators: signals['ema'] = signals['ema'] = indicators['ema_crossover']
+
     # invert the signal (signal > theta plus is overbought)
     if 'rsi' in indicators: signals['rsi'] = -vectorized_generate_signal(indicators['rsi'], params['rsi_theta_plus'],
                                                                         params['rsi_theta_minus'])
-    if 'macd_crossover' in indicators: signals['macd'] = vectorized_generate_signal(indicators['macd_crossover'],
-                                                                                    params['macd_theta_plus'],
-                                                                                    params['macd_theta_minus'])
+    if 'macd_crossover' in indicators: signals['macd'] = signals['macd'] = indicators['macd_crossover']
+
     if all(k in indicators for k in ['bb_upper', 'bb_lower', 'price']):
         bb_range = indicators['bb_upper'] - indicators['bb_lower']
         bb_position = (indicators['price'] - indicators['bb_lower']).div(bb_range.where(bb_range != 0)).replace(
