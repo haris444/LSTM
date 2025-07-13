@@ -101,7 +101,7 @@ def slow_simulation_loop_with_logging(data, prices, final_decisions, initial_cap
 
 
 # =============================================================================
-# PANDAS-BASED HELPER FUNCTIONS (UNCHANGED)
+# PANDAS-BASED HELPER FUNCTIONS
 # =============================================================================
 
 def vectorized_generate_signal(series, theta_plus, theta_minus):
@@ -166,12 +166,6 @@ def generate_all_signals_vectorized(indicators, params):
                 indicators['price'], indicators['bb_upper'], indicators['bb_lower']
             )
 
-        # Method 2: Proximity-based signals
-        elif params.get('bb_method') == 'proximity':
-            sensitivity = params.get('bb_sensitivity', 0.05)  # 5% of band width
-            signals['bb'] = generate_bollinger_band_signals_alternative(
-                indicators['price'], indicators['bb_upper'], indicators['bb_lower'], sensitivity
-            )
 
         # Method 3: Original percentage-based approach (fallback)
         else:

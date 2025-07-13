@@ -69,15 +69,14 @@ def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close
     # 1. Calculate P/E Ratio (unchanged - this can be forward-filled)
     df['PE_Ratio'] = calculate_pe_ratio(df[price_column], earnings_df)
 
-    # 2. Calculate Earnings Surprise - TRULY DISCRETE FOR Q1
+    # 2. Calculate Earnings Surprise
     historical_eps = earnings_df['eps'].tolist()
     reporting_dates = earnings_df['date'].tolist()
 
-    # Initialize ALL dates with 0 (neutral signal) - this is the key difference
+    # Initialize ALL dates with 0 (neutral signal)
     surprise_series = pd.Series(index=df.index, dtype=float, data=0.0)
 
     # Only set surprise values on actual earnings announcement dates
-    # NO forward-filling or persistence - signal is only active on announcement day
     for i in range(len(historical_eps)):
         if i >= 4:  # Need enough data for forecast
             expected_eps = estimate_earnings_with_model(historical_eps[:i])[0]
@@ -95,7 +94,6 @@ def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close
                 closest_date = df.index[closest_idx]
                 surprise_series.loc[closest_date] = surprise
 
-    # CRITICAL: Do NOT forward-fill for Question 1
     # The signal should be 0 on all days except announcement days
     df['Earnings_Surprise'] = surprise_series
 
@@ -107,7 +105,7 @@ def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close
     return df
 
 
-# Additional function for Question 2 where forward-filling is allowed
+#for Question 2 where forward-filling is allowed
 def add_fundamental_indicators_to_data_q2(df, earnings_df, price_column='MSFT_close'):
     """
     Version for Question 2 where forward-filling earnings surprise is acceptable.
