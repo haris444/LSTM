@@ -155,13 +155,21 @@ def generate_all_signals(indicators, params, current_idx):
             signals.append(generate_signal(indicators['macd_crossover'].iloc[current_idx],
                                            params['macd_theta_plus'], params['macd_theta_minus']))
         elif use_single == 4:  # Bollinger Bands
+            # FIXED: Calculate normalized BB position
             price_curr = indicators['bb_middle'].iloc[current_idx]
-            if price_curr < indicators['bb_lower'].iloc[current_idx]:
-                signals.append(1)
-            elif price_curr > indicators['bb_upper'].iloc[current_idx]:
-                signals.append(-1)
+            upper_band = indicators['bb_upper'].iloc[current_idx]
+            lower_band = indicators['bb_lower'].iloc[current_idx]
+
+            # Calculate BB position (0 = at lower band, 0.5 = at middle, 1 = at upper band)
+            if upper_band != lower_band:  # Avoid division by zero
+                bb_position = (price_curr - lower_band) / (upper_band - lower_band)
             else:
-                signals.append(0)
+                bb_position = 0.5  # Default to middle if bands are equal
+
+            # Generate signal based on thresholds
+            bb_signal = generate_signal(bb_position, params['bb_theta_plus'], params['bb_theta_minus'])
+            signals.append(-bb_signal)  # Invert: high BB position = overbought = sell signal
+
         elif use_single == 5:  # OBV
             obv_signal = calculate_obv_signal(
                 indicators['obv'], indicators['price'],
@@ -198,14 +206,20 @@ def generate_all_signals(indicators, params, current_idx):
     signals.append(generate_signal(indicators['macd_crossover'].iloc[current_idx],
                                    params['macd_theta_plus'], params['macd_theta_minus']))
 
-    # 5. Bollinger Bands Signal
+    # 5. Bollinger Bands Signal - FIXED IMPLEMENTATION
     price_curr = indicators['bb_middle'].iloc[current_idx]
-    if price_curr < indicators['bb_lower'].iloc[current_idx]:
-        signals.append(1)
-    elif price_curr > indicators['bb_upper'].iloc[current_idx]:
-        signals.append(-1)
+    upper_band = indicators['bb_upper'].iloc[current_idx]
+    lower_band = indicators['bb_lower'].iloc[current_idx]
+
+    # Calculate normalized BB position
+    if upper_band != lower_band:  # Avoid division by zero
+        bb_position = (price_curr - lower_band) / (upper_band - lower_band)
     else:
-        signals.append(0)
+        bb_position = 0.5  # Default to middle if bands are equal
+
+    # Generate signal: high position = overbought = sell, low position = oversold = buy
+    bb_signal = generate_signal(bb_position, params['bb_theta_plus'], params['bb_theta_minus'])
+    signals.append(-bb_signal)  # Invert the signal
 
     # 6. OBV Trend Confirmation Signal
     obv_signal = calculate_obv_signal(

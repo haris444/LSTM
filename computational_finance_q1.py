@@ -97,6 +97,7 @@ def main():
         'rsi_theta_plus': 70, 'rsi_theta_minus': 30,
         'macd_theta_plus': 0.15, 'macd_theta_minus': -0.15,
         'obv_theta_plus': 0.003, 'obv_theta_minus': -0.003,
+        'bb_theta_plus': 0.8, 'bb_theta_minus': 0.2,  # Fixed: Added BB thresholds
         'pe_theta_plus': 30, 'pe_theta_minus': 15,
         'surprise_theta_plus': 5, 'surprise_theta_minus': -5,
     }
@@ -158,9 +159,13 @@ def main():
         'macd_theta_plus': [0.1, 0.15],
         'macd_theta_minus': [-0.15, -0.1],
 
-        # OBV trend slope thresholds (percentage slope per period) - ADJUSTED
-        'obv_theta_plus': [0.002, 0.005],  # More sensitive thresholds
-        'obv_theta_minus': [-0.005, -0.002],  # More sensitive thresholds
+        # Fixed: Bollinger Bands thresholds for normalized position (0-1 scale)
+        'bb_theta_plus': [0.8, 0.9, 0.95],   # Near upper band (overbought)
+        'bb_theta_minus': [0.05, 0.1, 0.2],  # Near lower band (oversold)
+
+        # OBV trend slope thresholds (percentage slope per period)
+        'obv_theta_plus': [0.002, 0.005],
+        'obv_theta_minus': [-0.005, -0.002],
 
         # Fixed parameters
         'macd_fast': [12], 'macd_slow': [26], 'macd_signal': [9],
