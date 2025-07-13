@@ -1,321 +1,237 @@
-# improved_simulator.py
+# improved_simulator.py (Optimized with Numba and Hybrid Logging)
 import pandas as pd
 import numpy as np
+from numba import jit
+
+# Assuming these functions exist in your project and are correctly defined.
 from indicators import calculate_rsi, calculate_bollinger_bands, calculate_sma, calculate_obv
 from fundamental_indicators import add_fundamental_indicators_to_data
 
 
-def generate_signal(indicator_value, theta_plus, theta_minus):
+# =============================================================================
+# NUMBA-OPTIMIZED CORE SIMULATION LOOP (FOR SPEED)
+# =============================================================================
+@jit(nopython=True, cache=True)
+def fast_simulation_loop(prices, final_decisions, initial_capital, transaction_fee, lambda_worst):
     """
-    Generate trading signal based on assignment specification.
+    This is the core simulation loop, compiled to fast machine code by Numba.
+    It does NOT generate a trade log, prioritizing speed for grid search.
     """
-    if pd.isna(indicator_value):
-        return 0
-    if indicator_value > theta_plus:
-        return 1
-    elif indicator_value < theta_minus:
-        return -1
-    else:
-        return 0
+    capital = initial_capital
+    position = 0
+    portfolio_values = np.full(prices.shape, np.nan, dtype=np.float64)
 
+    for i in range(1, len(prices)):
+        portfolio_values[i - 1] = capital + (position * prices[i - 1])
+        current_price = prices[i]
+        final_decision = final_decisions[i]
 
-def calculate_position_size(capital, price, transaction_fee, position_type='long', lambda_worst=1.5):
-    """
-    Calculate maximum position size based on assignment constraints.
-    """
-    if position_type == 'long':
-        max_shares = int((capital - transaction_fee) / price)
-    else:  # short position
-        worst_case_price = lambda_worst * price
-        max_shares = int((capital - transaction_fee) / worst_case_price)
-    return max(0, max_shares)
+        if position != 0 and (final_decision == 0 or final_decision == -np.sign(position)):
+            capital += position * current_price - transaction_fee
+            position = 0
 
-
-def calculate_trend_slope_fast(values, window):
-    """
-    Fast trend slope calculation using vectorized operations.
-    Returns the slope coefficient normalized by the mean value.
-    """
-    if len(values) < window:
-        return 0.0
-
-    # Use numpy arrays directly - much faster
-    y_values = values[-window:]
-
-    # Handle edge cases
-    if np.std(y_values) == 0:
-        return 0.0
-
-    # Pre-computed x values for efficiency
-    x_values = np.arange(window, dtype=np.float32)
-    x_mean = (window - 1) / 2.0  # Mean of 0,1,2,...,window-1
-    y_mean = np.mean(y_values)
-
-    # Vectorized slope calculation
-    numerator = np.sum((x_values - x_mean) * (y_values - y_mean))
-    denominator = np.sum((x_values - x_mean) ** 2)  # This is constant for given window
-
-    if denominator == 0:
-        return 0.0
-
-    slope = numerator / denominator
-
-    # Normalize by mean
-    if y_mean != 0:
-        return slope / abs(y_mean)
-    else:
-        return 0.0
-
-
-def calculate_obv_signal(obv_series, price_series, window, theta_plus, theta_minus, current_idx):
-    """
-    Calculate OBV trend confirmation signal - OPTIMIZED VERSION.
-    """
-    if current_idx < window:
-        return 0
-
-    # Extract numpy arrays directly - much faster than pandas slicing
-    obv_values = obv_series.values[current_idx - window + 1:current_idx + 1]
-    price_values = price_series.values[current_idx - window + 1:current_idx + 1]
-
-    # Calculate trend slopes using fast method
-    obv_slope = calculate_trend_slope_fast(obv_values, window)
-    price_slope = calculate_trend_slope_fast(price_values, window)
-
-    # Quick boolean checks
-    obv_up = obv_slope > theta_plus
-    obv_down = obv_slope < theta_minus
-    price_up = price_slope > theta_plus
-    price_down = price_slope < theta_minus
-
-    # Optimized decision tree
-    if obv_up:
-        if price_up or not price_down:
-            return 1  # OBV strength + price confirmation or neutral
-    elif obv_down:
-        if price_down or not price_up:
-            return -1  # OBV weakness + price confirmation or neutral
-    elif obv_up and price_down:
-        return 1  # Bullish divergence
-    elif obv_down and price_up:
-        return -1  # Bearish divergence
-
-    return 0
-
-
-def calculate_runtime_indicators(data, params):
-    """
-    Calculate indicators that don't depend on crossover logic.
-    These are calculated at runtime during the simulation.
-    """
-    price_col = params.get('price_column', 'MSFT_close')
-    volume_col = params.get('volume_column', 'MSFT_volume')
-
-    indicators = {}
-    indicators['rsi'] = calculate_rsi(data[price_col], params['rsi_window'])
-    upper, lower = calculate_bollinger_bands(data[price_col], params['bb_window'], params['bb_std_dev'])
-    indicators['bb_upper'] = upper
-    indicators['bb_lower'] = lower
-    indicators['bb_middle'] = calculate_sma(data[price_col], params['bb_window'])
-
-    # Calculate OBV
-    indicators['obv'] = calculate_obv(data[price_col], data[volume_col])
-    indicators['price'] = data[price_col]  # Store price for OBV trend analysis
-
-    # Add pre-calculated crossover states and fundamental indicators from the input data
-    for col in ['sma_crossover', 'ema_crossover', 'macd_crossover', 'PE_Ratio', 'Earnings_Surprise']:
-        if col in data.columns:
-            indicators[col] = data[col]
-
-    return indicators
-
-
-def generate_all_signals(indicators, params, current_idx):
-    """
-    Generate signals for all indicators by reading their pre-computed states
-    or calculating their values at runtime.
-    """
-    signals = []
-
-    # Check if we're testing a single indicator
-    use_single = params.get('use_single_indicator', None)
-
-    if use_single is not None:
-        # Only use the specified indicator
-        if use_single == 0:  # SMA
-            signals.append(generate_signal(indicators['sma_crossover'].iloc[current_idx],
-                                           params['sma_theta_plus'], params['sma_theta_minus']))
-        elif use_single == 1:  # EMA
-            signals.append(generate_signal(indicators['ema_crossover'].iloc[current_idx],
-                                           params['ema_theta_plus'], params['ema_theta_minus']))
-        elif use_single == 2:  # RSI
-            signals.append(generate_signal(indicators['rsi'].iloc[current_idx],
-                                           params['rsi_theta_plus'], params['rsi_theta_minus']))
-        elif use_single == 3:  # MACD
-            signals.append(generate_signal(indicators['macd_crossover'].iloc[current_idx],
-                                           params['macd_theta_plus'], params['macd_theta_minus']))
-        elif use_single == 4:  # Bollinger Bands
-            # FIXED: Calculate normalized BB position
-            price_curr = indicators['bb_middle'].iloc[current_idx]
-            upper_band = indicators['bb_upper'].iloc[current_idx]
-            lower_band = indicators['bb_lower'].iloc[current_idx]
-
-            # Calculate BB position (0 = at lower band, 0.5 = at middle, 1 = at upper band)
-            if upper_band != lower_band:  # Avoid division by zero
-                bb_position = (price_curr - lower_band) / (upper_band - lower_band)
+        if position == 0 and final_decision != 0:
+            if final_decision > 0:
+                if current_price > 0:
+                    max_shares = int((capital - transaction_fee) / current_price)
+                    if max_shares > 0:
+                        position = max_shares
+                        capital -= position * current_price + transaction_fee
             else:
-                bb_position = 0.5  # Default to middle if bands are equal
+                worst_case_price = lambda_worst * current_price
+                if worst_case_price > 0:
+                    max_shares = int((capital - transaction_fee) / worst_case_price)
+                    if max_shares > 0:
+                        position = -max_shares
+                        capital += abs(position) * current_price - transaction_fee
 
-            # Generate signal based on thresholds
-            bb_signal = generate_signal(bb_position, params['bb_theta_plus'], params['bb_theta_minus'])
-            signals.append(-bb_signal)  # Invert: high BB position = overbought = sell signal
-
-        elif use_single == 5:  # OBV
-            obv_signal = calculate_obv_signal(
-                indicators['obv'], indicators['price'],
-                params['obv_window'], params['obv_theta_plus'], params['obv_theta_minus'],
-                current_idx
-            )
-            signals.append(obv_signal)
-        elif use_single == 6:  # P/E Ratio
-            if 'PE_Ratio' in indicators:
-                pe_signal = generate_signal(indicators['PE_Ratio'].iloc[current_idx],
-                                            params['pe_theta_plus'], params['pe_theta_minus'])
-                signals.append(-pe_signal)  # Inverted: Low P/E is a buy signal
-        elif use_single == 7:  # Earnings Surprise
-            if 'Earnings_Surprise' in indicators:
-                surprise = indicators['Earnings_Surprise'].iloc[current_idx]
-                signals.append(generate_signal(surprise, params['surprise_theta_plus'],
-                                               params['surprise_theta_minus']))
-        return signals
-
-    # Use all indicators (normal mode)
-    # 1. SMA Crossover Signal
-    signals.append(generate_signal(indicators['sma_crossover'].iloc[current_idx],
-                                   params['sma_theta_plus'], params['sma_theta_minus']))
-
-    # 2. EMA Crossover Signal
-    signals.append(generate_signal(indicators['ema_crossover'].iloc[current_idx],
-                                   params['ema_theta_plus'], params['ema_theta_minus']))
-
-    # 3. RSI Signal
-    signals.append(generate_signal(indicators['rsi'].iloc[current_idx],
-                                   params['rsi_theta_plus'], params['rsi_theta_minus']))
-
-    # 4. MACD Crossover Signal
-    signals.append(generate_signal(indicators['macd_crossover'].iloc[current_idx],
-                                   params['macd_theta_plus'], params['macd_theta_minus']))
-
-    # 5. Bollinger Bands Signal - FIXED IMPLEMENTATION
-    price_curr = indicators['bb_middle'].iloc[current_idx]
-    upper_band = indicators['bb_upper'].iloc[current_idx]
-    lower_band = indicators['bb_lower'].iloc[current_idx]
-
-    # Calculate normalized BB position
-    if upper_band != lower_band:  # Avoid division by zero
-        bb_position = (price_curr - lower_band) / (upper_band - lower_band)
-    else:
-        bb_position = 0.5  # Default to middle if bands are equal
-
-    # Generate signal: high position = overbought = sell, low position = oversold = buy
-    bb_signal = generate_signal(bb_position, params['bb_theta_plus'], params['bb_theta_minus'])
-    signals.append(-bb_signal)  # Invert the signal
-
-    # 6. OBV Trend Confirmation Signal
-    obv_signal = calculate_obv_signal(
-        indicators['obv'], indicators['price'],
-        params['obv_window'], params['obv_theta_plus'], params['obv_theta_minus'],
-        current_idx
-    )
-    signals.append(obv_signal)
-
-    # 7. P/E Ratio Signal
-    if 'PE_Ratio' in indicators:
-        pe_signal = generate_signal(indicators['PE_Ratio'].iloc[current_idx],
-                                    params['pe_theta_plus'], params['pe_theta_minus'])
-        signals.append(-pe_signal)  # Inverted: Low P/E is a buy signal
-
-    # 8. Earnings Surprise Signal
-    if 'Earnings_Surprise' in indicators:
-        surprise = indicators['Earnings_Surprise'].iloc[current_idx]
-        signals.append(generate_signal(surprise, params['surprise_theta_plus'],
-                                       params['surprise_theta_minus']))
-
-    return signals
+    if len(prices) > 0:
+        portfolio_values[-1] = capital + (position * prices[-1])
+    return portfolio_values
 
 
-def aggregate_signals(signals, method='majority_vote', weights=None):
+# =============================================================================
+# PYTHON-BASED SIMULATION LOOP (FOR ACCURATE LOGGING)
+# =============================================================================
+def slow_simulation_loop_with_logging(data, prices, final_decisions, initial_capital, transaction_fee, lambda_worst):
     """
-    Aggregate individual indicator signals into a final decision.
+    A pure Python version of the simulation loop that correctly generates a trade log.
+    Used for analysis where details are more important than maximum speed.
     """
-    if not signals:
-        return 0
-    if method == 'majority_vote':
-        return int(np.sign(np.sum(signals)))
-    elif method == 'weighted_sum':
-        if weights and len(weights) >= len(signals):
-            weighted_sum = np.sum([s * w for s, w in zip(signals, weights)])
-            return int(np.sign(weighted_sum))
-        else:
-            return int(np.sign(np.sum(signals)))
-    return 0
-
-
-def run_improved_simulation(data, params):
-    """
-    Run trading simulation using a DataFrame that includes pre-computed crossover states.
-    """
-    # Calculate runtime indicators like RSI, Bollinger Bands, and OBV
-    indicators = calculate_runtime_indicators(data, params)
-
-    # Simulation setup
-    initial_capital = params.get('initial_capital', 100000.0)
-    transaction_fee = params.get('transaction_fee', 5.0)
-    price_col = params.get('price_column', 'MSFT_close')
-
     capital = initial_capital
     position = 0
     portfolio_values = pd.Series(index=data.index, dtype=float)
     trade_log = []
 
-    # Simulation loop
     for i in range(1, len(data)):
-        current_price = data[price_col].iloc[i]
-        portfolio_values.iloc[i - 1] = capital + (position * data[price_col].iloc[i - 1])
+        portfolio_values.iloc[i - 1] = capital + (position * prices[i - 1])
+        current_price = prices[i]
+        final_decision = final_decisions[i]
 
-        signals = generate_all_signals(indicators, params, i)
-        final_decision = aggregate_signals(signals, method=params.get('aggregation_method', 'majority_vote'),
-                                           weights=params.get('signal_weights'))
-
-        # Close position if signal is neutral or opposite
         if position != 0 and (final_decision == 0 or final_decision == -np.sign(position)):
             action = 'close_long' if position > 0 else 'close_short'
             capital += position * current_price - transaction_fee
             trade_log.append({'date': data.index[i], 'action': action, 'shares': abs(position), 'price': current_price})
             position = 0
 
-        # Open a new position
         if position == 0 and final_decision != 0:
-            if final_decision > 0:  # Open long
-                max_shares = calculate_position_size(capital, current_price, transaction_fee, 'long')
-                if max_shares > 0:
-                    position = max_shares
-                    capital -= position * current_price + transaction_fee
-                    trade_log.append(
-                        {'date': data.index[i], 'action': 'open_long', 'shares': position, 'price': current_price})
-            else:  # Open short
-                max_shares = calculate_position_size(capital, current_price, transaction_fee, 'short',
-                                                     params['lambda_worst'])
-                if max_shares > 0:
-                    position = -max_shares
-                    capital += abs(position) * current_price - transaction_fee
-                    trade_log.append({'date': data.index[i], 'action': 'open_short', 'shares': abs(position),
-                                      'price': current_price})
+            if final_decision > 0:
+                if current_price > 0:
+                    max_shares = int((capital - transaction_fee) / current_price)
+                    if max_shares > 0:
+                        position = max_shares
+                        capital -= position * current_price + transaction_fee
+                        trade_log.append(
+                            {'date': data.index[i], 'action': 'open_long', 'shares': position, 'price': current_price})
+            else:
+                worst_case_price = lambda_worst * current_price
+                if worst_case_price > 0:
+                    max_shares = int((capital - transaction_fee) / worst_case_price)
+                    if max_shares > 0:
+                        position = -max_shares
+                        capital += abs(position) * current_price - transaction_fee
+                        trade_log.append({'date': data.index[i], 'action': 'open_short', 'shares': abs(position),
+                                          'price': current_price})
 
-    portfolio_values.iloc[-1] = capital + (position * data[price_col].iloc[-1])
+    if len(data) > 0:
+        portfolio_values.iloc[-1] = capital + (position * prices[-1])
+    return portfolio_values, trade_log
 
-    # Calculate performance metrics
-    returns = portfolio_values.pct_change().dropna()
-    sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252) if returns.std() != 0 else 0.0
+
+# =============================================================================
+# PANDAS-BASED HELPER FUNCTIONS (UNCHANGED)
+# =============================================================================
+
+def vectorized_generate_signal(series, theta_plus, theta_minus):
+    series = pd.to_numeric(series, errors='coerce')
+    conditions = [series > theta_plus, series < theta_minus]
+    choices = [1, -1]
+    return np.select(conditions, choices, default=0)
+
+
+def vectorized_calculate_trend_slope(series, window):
+    x = np.arange(window, dtype=np.float64)
+    x_mean = x.mean()
+    x_var = x.var()
+    if x_var == 0: return pd.Series(0.0, index=series.index)
+    y_mean_rolling = series.rolling(window).mean()
+    xy_cov_rolling = (series.rolling(window).apply(lambda y: np.mean(x * y), raw=True) - y_mean_rolling * x_mean)
+    slope = xy_cov_rolling / x_var
+    return slope.div(y_mean_rolling.abs() + 1e-9).replace([np.inf, -np.inf], 0).fillna(0)
+
+
+def calculate_all_indicators(data, params):
+    price_col, volume_col = params.get('price_column', 'MSFT_close'), params.get('volume_column', 'MSFT_volume')
+    indicators = pd.DataFrame(index=data.index)
+    indicators['price'] = data[price_col]
+    if 'rsi_window' in params: indicators['rsi'] = calculate_rsi(data[price_col], params['rsi_window'])
+    if 'bb_window' in params:
+        indicators['bb_middle'] = calculate_sma(data[price_col], params['bb_window'])
+        upper, lower = calculate_bollinger_bands(data[price_col], params['bb_window'], params['bb_std_dev'])
+        indicators['bb_upper'], indicators['bb_lower'] = upper, lower
+    if 'obv_window' in params: indicators['obv'] = calculate_obv(data[price_col], data[volume_col])
+    for col in ['sma_crossover', 'ema_crossover', 'macd_crossover', 'PE_Ratio', 'Earnings_Surprise']:
+        if col in data.columns: indicators[col] = data[col]
+    return indicators.bfill().ffill().fillna(0)
+
+
+def generate_all_signals_vectorized(indicators, params):
+    signals = pd.DataFrame(index=indicators.index)
+    if 'sma_crossover' in indicators: signals['sma'] = vectorized_generate_signal(indicators['sma_crossover'],
+                                                                                  params['sma_theta_plus'],
+                                                                                  params['sma_theta_minus'])
+    if 'ema_crossover' in indicators: signals['ema'] = vectorized_generate_signal(indicators['ema_crossover'],
+                                                                                  params['ema_theta_plus'],
+                                                                                  params['ema_theta_minus'])
+    if 'rsi' in indicators: signals['rsi'] = vectorized_generate_signal(indicators['rsi'], params['rsi_theta_plus'],
+                                                                        params['rsi_theta_minus'])
+    if 'macd_crossover' in indicators: signals['macd'] = vectorized_generate_signal(indicators['macd_crossover'],
+                                                                                    params['macd_theta_plus'],
+                                                                                    params['macd_theta_minus'])
+    if all(k in indicators for k in ['bb_upper', 'bb_lower', 'price']):
+        bb_range = indicators['bb_upper'] - indicators['bb_lower']
+        bb_position = (indicators['price'] - indicators['bb_lower']).div(bb_range.where(bb_range != 0)).replace(
+            [np.inf, -np.inf], 0.5).fillna(0.5)
+        signals['bb'] = -vectorized_generate_signal(bb_position, params['bb_theta_plus'], params['bb_theta_minus'])
+    if all(k in indicators for k in ['obv', 'price']):
+        obv_slope, price_slope = vectorized_calculate_trend_slope(indicators['obv'], params[
+            'obv_window']), vectorized_calculate_trend_slope(indicators['price'], params['obv_window'])
+        obv_is_up, obv_is_down = obv_slope > params['obv_theta_plus'], obv_slope < params['obv_theta_minus']
+        price_is_up, price_is_down = price_slope > 0, price_slope < 0
+        condlist = [obv_is_up & price_is_up, obv_is_up & price_is_down, obv_is_down & price_is_down,
+                    obv_is_down & price_is_up]
+        signals['obv'] = np.select(condlist, [1, 1, -1, -1], default=0)
+    if 'PE_Ratio' in indicators: signals['pe'] = -vectorized_generate_signal(indicators['PE_Ratio'],
+                                                                             params['pe_theta_plus'],
+                                                                             params['pe_theta_minus'])
+    if 'Earnings_Surprise' in indicators: signals['surprise'] = vectorized_generate_signal(
+        indicators['Earnings_Surprise'], params['surprise_theta_plus'], params['surprise_theta_minus'])
+    use_single = params.get('use_single_indicator', None)
+    if use_single is not None:
+        indicator_map = {0: 'sma', 1: 'ema', 2: 'rsi', 3: 'macd', 4: 'bb', 5: 'obv', 6: 'pe', 7: 'surprise'}
+        indicator_to_keep = indicator_map.get(use_single)
+        if indicator_to_keep in signals.columns:
+            return signals[[indicator_to_keep]].reindex(indicators.index).fillna(0).astype(int)
+        else:
+            return pd.DataFrame(0, index=indicators.index, columns=['empty'])
+    return signals.reindex(indicators.index).fillna(0).astype(int)
+
+
+def aggregate_signals_vectorized(signals_df, method='majority_vote', weights=None):
+    if signals_df.empty or 'empty' in signals_df.columns: return pd.Series(0, index=signals_df.index)
+    if method == 'weighted_sum' and weights:
+        signal_order = ['sma', 'ema', 'rsi', 'macd', 'bb', 'obv', 'pe', 'surprise']
+        weight_map = dict(zip(signal_order, weights))
+        weighted_sum = sum(signals_df[col] * weight_map[col] for col in signals_df.columns if col in weight_map)
+        return np.sign(weighted_sum).astype(int)
+    return np.sign(signals_df.sum(axis=1)).astype(int)
+
+
+# =============================================================================
+# MAIN SIMULATOR FUNCTION (NOW WITH HYBRID LOGIC)
+# =============================================================================
+def run_improved_simulation(data, params, log_trades=False):
+    """
+    Run trading simulation with a choice between a fast Numba loop (no logs)
+    and a slower Python loop (with logs).
+    """
+    try:
+        indicators = calculate_all_indicators(data.copy(), params)
+        signals_df = generate_all_signals_vectorized(indicators, params)
+        final_decision_series = aggregate_signals_vectorized(
+            signals_df, method=params.get('aggregation_method', 'majority_vote'), weights=params.get('signal_weights')
+        )
+    except KeyError as e:
+        print(f"Parameter error during data prep: {e}")
+        return -np.inf, pd.Series(dtype=float), []
+
+    prices_np = data[params.get('price_column', 'MSFT_close')].to_numpy(dtype=np.float64)
+    final_decisions_np = final_decision_series.to_numpy(dtype=np.int64)
+
+    # --- HYBRID LOOP SELECTION ---
+    if log_trades:
+        # Use the slower loop that generates a detailed trade log for analysis.
+        portfolio_values, trade_log = slow_simulation_loop_with_logging(
+            data, prices_np, final_decisions_np, params.get('initial_capital', 100000.0),
+            params.get('transaction_fee', 5.0), params.get('lambda_worst', 1.5)
+        )
+    else:
+        # Use the fast Numba loop for grid search; no trade log is generated.
+        portfolio_values_np = fast_simulation_loop(
+            prices_np, final_decisions_np, params.get('initial_capital', 100000.0),
+            params.get('transaction_fee', 5.0), params.get('lambda_worst', 1.5)
+        )
+        portfolio_values = pd.Series(portfolio_values_np, index=data.index)
+        trade_log = []
+
+    # --- Performance Metric Calculation ---
+    if len(portfolio_values.dropna()) > 1:
+        returns = portfolio_values.pct_change().dropna()
+        if not returns.empty and returns.std() != 0:
+            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
+        else:
+            sharpe_ratio = 0.0
+    else:
+        sharpe_ratio = 0.0
 
     return sharpe_ratio, portfolio_values, trade_log

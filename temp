@@ -1,0 +1,110 @@
+    param_grid = {
+        'initial_capital': [100000.0], 'transaction_fee': [5.0], 'lambda_worst': [1.5],
+        'price_column': ['MSFT_close'], 'volume_column': ['MSFT_volume'], 'aggregation_method': ['weighted_sum'],
+        'signal_weights': [[2.0, 2.0, 1.5, 1.0, 0.5, 1.5, 0.5, 0.5], [1.0, 1.0, 2.0, 1.5, 1.0, 1.0, 0.5, 0.5], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], [1.5, 1.5, 0.5, 0.5, 0.5, 2.0, 1.0, 1.0]],
+        'sma_short_window': [10, 50], 'sma_long_window': [100, 200], 'ema_short_window': [12, 20], 'ema_long_window': [26, 50],
+        'rsi_window': [14, 21], 'obv_window': [10, 30], 'sma_theta_plus': [1.0, 2.0], 'sma_theta_minus': [-2.0, -1.0],
+        'ema_theta_plus': [0.25, 0.5], 'ema_theta_minus': [-0.5, -0.25], 'rsi_theta_plus': [70, 90], 'rsi_theta_minus': [15, 30],
+        'macd_theta_plus': [0.1, 0.15], 'macd_theta_minus': [-0.15, -0.1], 'bb_theta_plus': [0.8, 0.95], 'bb_theta_minus': [0.05, 0.2],
+        'obv_theta_plus': [0.002, 0.005], 'obv_theta_minus': [-0.005, -0.002], 'macd_fast': [12], 'macd_slow': [26], 'macd_signal': [9],
+        'bb_window': [20], 'bb_std_dev': [2.0], 'pe_theta_plus': [30], 'pe_theta_minus': [15], 'surprise_theta_plus': [5], 'surprise_theta_minus': [-5],
+    }
+
+
+
+Progress: 1048450/1048576 (99.99%) | Best Sharpe: 0.2247 | Rate: 28904/min | Est. Left: 0.0 min
+Progress: 1048500/1048576 (99.99%) | Best Sharpe: 0.2247 | Rate: 28904/min | Est. Left: 0.0 min
+Progress: 1048550/1048576 (100.00%) | Best Sharpe: 0.2247 | Rate: 28904/min | Est. Left: 0.0 min
+
+Optimization complete! Processed 1048576/1048576 combinations.
+Total time: 36.29 minutes
+
+============================================================
+OPTIMIZATION RESULTS ON TRAINING DATA
+============================================================
+Best Sharpe Ratio Found: 0.2247
+
+Optimal Parameters:
+  initial_capital: 100000.0
+  transaction_fee: 5.0
+  lambda_worst: 1.5
+  price_column: MSFT_close
+  volume_column: MSFT_volume
+  aggregation_method: weighted_sum
+  signal_weights: [1.0, 1.0, 2.0, 1.5, 1.0, 1.0, 0.5, 0.5]
+  sma_short_window: 10
+  sma_long_window: 100
+  ema_short_window: 12
+  ema_long_window: 26
+  rsi_window: 21
+  obv_window: 30
+  sma_theta_plus: 1.0
+  sma_theta_minus: -2.0
+  ema_theta_plus: 0.25
+  ema_theta_minus: -0.5
+  rsi_theta_plus: 90
+  rsi_theta_minus: 15
+  macd_theta_plus: 0.1
+  macd_theta_minus: -0.15
+  bb_theta_plus: 0.95
+  bb_theta_minus: 0.2
+  obv_theta_plus: 0.002
+  obv_theta_minus: -0.005
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  bb_window: 20
+  bb_std_dev: 2.0
+  pe_theta_plus: 30
+  pe_theta_minus: 15
+  surprise_theta_plus: 5
+  surprise_theta_minus: -5
+/usr/local/lib/python3.11/dist-packages/numpy/lib/_function_base_impl.py:2922: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.11/dist-packages/numpy/lib/_function_base_impl.py:2923: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+
+Parameter Sensitivity Analysis (Correlation with Sharpe Ratio):
+============================================================
+initial_capital          :      nan
+transaction_fee          :      nan
+lambda_worst             :      nan
+obv_window               :   0.5695
+obv_theta_plus           :  -0.4239
+rsi_theta_minus          :  -0.2123
+obv_theta_minus          :  -0.1505
+rsi_window               :   0.1436
+bb_theta_minus           :   0.0910
+ema_short_window         :   0.0745
+bb_theta_plus            :   0.0374
+rsi_theta_plus           :  -0.0332
+ema_long_window          :   0.0281
+sma_short_window         :  -0.0000
+sma_long_window          :   0.0000
+ema_theta_plus           :  -0.0000
+ema_theta_minus          :   0.0000
+sma_theta_minus          :   0.0000
+macd_theta_minus         :  -0.0000
+macd_theta_plus          :  -0.0000
+sma_theta_plus           :  -0.0000
+macd_fast                :      nan
+macd_slow                :      nan
+macd_signal              :      nan
+bb_window                :      nan
+bb_std_dev               :      nan
+pe_theta_plus            :      nan
+pe_theta_minus           :      nan
+surprise_theta_plus      :      nan
+surprise_theta_minus     :      nan
+============================================================
+
+============================================================
+PART 3: EVALUATING BEST STRATEGY ON TEST DATA
+============================================================
+
+--- Test Set Performance Metrics ---
+Cumulative Return: 51.25%
+Annualized Volatility: 20.50%
+Sharpe Ratio: 0.7987
+Maximum Drawdown: -18.58%
+Total Trades: 299
