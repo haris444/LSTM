@@ -1,4 +1,4 @@
-# fundamental_indicators.py
+# fundamental_indicators.py - Fixed for Question 1 requirements
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
@@ -7,13 +7,6 @@ from sklearn.linear_model import LinearRegression
 def calculate_pe_ratio(price_series, earnings_data):
     """
     Calculate P/E ratio using real, historical earnings data.
-
-    Args:
-        price_series: Daily stock prices.
-        earnings_data: DataFrame with 'date' and 'eps' columns.
-
-    Returns:
-        Series of P/E ratios.
     """
     pe_ratios = pd.Series(index=price_series.index, dtype=float)
     reporting_dates = earnings_data['date'].tolist()
@@ -62,18 +55,10 @@ def calculate_earnings_surprise(actual_earnings, expected_earnings):
     return ((actual_earnings - expected_earnings) / abs(expected_earnings)) * 100
 
 
-# ----> MAJOR CHANGE: NO MORE SYNTHETIC DATA <----
 def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close'):
     """
     Add fundamental indicators to the main dataset using real earnings data.
-
-    Args:
-        df: Main DataFrame with price/volume data.
-        earnings_df: DataFrame containing the real historical earnings data.
-        price_column: The name of the price column.
-
-    Returns:
-        DataFrame with added fundamental indicators.
+    FIXED: Earnings Surprise is now discrete for Question 1 requirements.
     """
     if earnings_df.empty:
         print("Warning: Earnings data is empty. Skipping fundamental indicators.")
@@ -81,33 +66,36 @@ def add_fundamental_indicators_to_data(df, earnings_df, price_column='MSFT_close
         df['Earnings_Surprise'] = 0
         return df
 
-    # 1. Calculate P/E Ratio
+    # 1. Calculate P/E Ratio (unchanged)
     df['PE_Ratio'] = calculate_pe_ratio(df[price_column], earnings_df)
 
-    # 2. Calculate Earnings Surprise
+    # 2. Calculate Earnings Surprise - FIXED FOR Q1
     historical_eps = earnings_df['eps'].tolist()
     reporting_dates = earnings_df['date'].tolist()
-    surprises = []
 
+    # Initialize all dates with 0 (neutral signal)
+    surprise_series = pd.Series(index=df.index, dtype=float, data=0.0)
+
+    # Only set surprise values on actual earnings announcement dates
     for i in range(len(historical_eps)):
-        if i >= 4:  # Need a few data points to make a forecast
+        if i >= 4:  # Need enough data for forecast
             expected_eps = estimate_earnings_with_model(historical_eps[:i])[0]
             actual_eps = historical_eps[i]
             surprise = calculate_earnings_surprise(actual_eps, expected_eps)
-            surprises.append(surprise)
-        else:
-            surprises.append(0)  # Not enough data for a surprise calc
 
-    # Map the surprises to the daily dataframe
-    surprise_series = pd.Series(index=df.index, dtype=float, data=0.0)
-    for i, report_date in enumerate(reporting_dates):
-        # Get the index in the daily data that is closest to the report date
-        closest_idx = df.index.get_indexer([report_date], method='nearest')[0]
-        # Forward-fill the surprise value from that date onwards
-        if i < len(surprises):
-            surprise_series.iloc[closest_idx:] = surprises[i]
+            # Find the exact date or closest date in our dataset
+            report_date = reporting_dates[i]
+            if report_date in df.index:
+                # Exact match - use this date
+                surprise_series.loc[report_date] = surprise
+            else:
+                # Find closest trading day
+                closest_idx = df.index.get_indexer([report_date], method='nearest')[0]
+                closest_date = df.index[closest_idx]
+                surprise_series.loc[closest_date] = surprise
 
     df['Earnings_Surprise'] = surprise_series
 
-    print("Successfully added P/E Ratio and Earnings Surprise from real data.")
+    print("Successfully added P/E Ratio and discrete Earnings Surprise for Q1.")
+    print(f"Earnings announcements with surprise != 0: {(surprise_series != 0).sum()}")
     return df
