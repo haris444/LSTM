@@ -372,7 +372,7 @@ device = get_execution_device()
 # --- Model Definition with Regularization ---
 # This class is included here for completeness. It includes Dropout to prevent overfitting.
 class LSTMTradingAgent(nn.Module):
-    def __init__(self, d_input, d_hidden, num_indicators, window_sizes, dropout_prob=0.5, tau=1.0):
+    def __init__(self, d_input, d_hidden, num_indicators, window_sizes, dropout_prob=0.3, tau=1.0):
         super().__init__()
         self.num_indicators = num_indicators
         self.window_sizes = window_sizes
@@ -393,19 +393,26 @@ class LSTMTradingAgent(nn.Module):
         self.beta = nn.Parameter(torch.randn(num_indicators))
         self.bias = nn.Parameter(torch.zeros(1))
 
-    def forward(self, x, indicator_bank, debug=False):
+    def forward(self, x, indicator_bank, debug=False, return_params=False):
         _, (h_n, _) = self.lstm(x)
         h_t = self.dropout(h_n[-1])
 
         signals = []
+        all_weights = []
+        all_thresholds = []
+        all_indicator_values = []
+
         for i in range(self.num_indicators):
             alpha_logits = self.window_heads[i](h_t)
+            # Gumbel-Softmax Sampling [cite: 242]
             gumbel_noise = -torch.log(-torch.log(torch.rand_like(alpha_logits)))
             weights = F.softmax((alpha_logits + gumbel_noise) / self.tau, dim=-1)
 
+            # Soft Indicator Computation [cite: 245]
             I_i = indicator_bank[i]
             indicator_value = (weights * I_i).sum(dim=-1)
 
+            # Threshold Prediction [cite: 247]
             thresholds = self.threshold_heads[i](h_t)
             theta_plus, theta_minus = thresholds[:, 0], thresholds[:, 1]
 
@@ -413,9 +420,19 @@ class LSTMTradingAgent(nn.Module):
                   torch.sigmoid((theta_minus - indicator_value) / 0.1)
             signals.append(s_i)
 
+            if return_params:
+                all_weights.append(weights)
+                all_thresholds.append(thresholds)
+                all_indicator_values.append(indicator_value)
+
         S = torch.stack(signals, dim=-1)
         decision = torch.tanh(S @ self.beta + self.bias)
-        return decision
+
+        if return_params:
+            # Return decision and stacked parameters for each indicator
+            return decision, torch.stack(all_weights, dim=1), torch.stack(all_thresholds, dim=1), torch.stack(all_indicator_values, dim=1)
+        else:
+            return decision
 
 class TradingDataset(Dataset):
     def __init__(self, X, indicator_bank, returns):
@@ -443,6 +460,66 @@ def return_loss(returns):
 def hybrid_loss(returns, mu_sharpe=0.5, mu_ret=0.5):
     return mu_sharpe * sharpe_loss(returns) + mu_ret * return_loss(returns)
 
+
+def get_dynamic_parameters(model, loader, device):
+    """
+    Runs the model on a dataset and collects the learned dynamic parameters.
+    """
+    model.eval()
+    all_w, all_theta, all_I_hat = [], [], []
+    with torch.no_grad():
+        for x, banks, y in loader:
+            x, banks = x.to(device), banks.to(device)
+            banks_list = [banks[:, i, :] for i in range(model.num_indicators)]
+
+            # Use the modified forward pass to get parameters
+            _, weights, thresholds, ind_values = model(x, banks_list, return_params=True)
+
+            all_w.append(weights.cpu().numpy())
+            all_theta.append(thresholds.cpu().numpy())
+            all_I_hat.append(ind_values.cpu().numpy())
+
+    # Concatenate results from all batches
+    return np.concatenate(all_w, axis=0), np.concatenate(all_theta, axis=0), np.concatenate(all_I_hat, axis=0)
+
+
+def plot_dynamic_parameters(dates, weights, thresholds, indicator_values, indicator_names, window_sizes, indicator_to_plot_idx=0):
+    """
+    Visualizes the learned dynamic window sizes and thresholds over time for a selected indicator.
+    """
+    indicator_name = indicator_names[indicator_to_plot_idx]
+
+    # Extract data for the selected indicator
+    w = weights[:, indicator_to_plot_idx, :]
+    theta_plus = thresholds[:, indicator_to_plot_idx, 0]
+    theta_minus = thresholds[:, indicator_to_plot_idx, 1]
+    i_hat = indicator_values[:, indicator_to_plot_idx]
+
+    fig, axes = plt.subplots(2, 1, figsize=(16, 10), sharex=True)
+    plt.style.use('dark_background')
+
+    # --- Plot 1: Dynamic Window Weights ---
+    axes[0].stackplot(dates, w.T, labels=[f'Win {size}' for size in window_sizes], alpha=0.8)
+    axes[0].set_title(f'Dynamic Window Weights for {indicator_name}', fontsize=14)
+    axes[0].set_ylabel('Attention Weight')
+    axes[0].legend(loc='upper left')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim(0, 1)
+
+    # --- Plot 2: Dynamic Thresholds vs. Indicator Value ---
+    axes[1].plot(dates, i_hat, label=f'Soft Indicator Value ($\hat{{I}}(t)$)', color='white', linewidth=2)
+    axes[1].plot(dates, theta_plus, label=f'Upper Threshold ($\Theta^+(t)$)', color='lime', linestyle='--')
+    axes[1].plot(dates, theta_minus, label=f'Lower Threshold ($\Theta^-(t)$)', color='red', linestyle='--')
+    axes[1].fill_between(dates, theta_minus, theta_plus, color='gray', alpha=0.2, label='Neutral Zone')
+
+    axes[1].set_title(f'Dynamic Thresholds for {indicator_name}', fontsize=14)
+    axes[1].set_ylabel('Value')
+    axes[1].set_xlabel('Date')
+    axes[1].legend(loc='upper left')
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
 
 
 import pandas as pd
@@ -534,7 +611,7 @@ indicator_dfs.append(pe_df)
 print(f"Created banks for {len(indicator_dfs)} indicators.")
 
 # --- 3. Create Sequences and Sanitize Data ---
-seq_len = 100
+seq_len = 256
 X_list, y_list, all_indicator_banks_list = [], [], []
 for ind_df in indicator_dfs:
     ind_df = ind_df.reindex(df.index).fillna(0)
@@ -615,23 +692,7 @@ print("\nTraining complete.")
 final_val_sharpe = get_performance(val_loader) * np.sqrt(252)
 print(f"\nFinal Annualized Validation Sharpe Ratio: {final_val_sharpe:.4f}")
 
-# --- 7. Plotting Training History ---
-plt.style.use('dark_background')
-fig, ax1 = plt.subplots(figsize=(12, 6))
-ax1.set_xlabel('Epochs')
-ax1.set_ylabel('Sharpe Ratio (un-annualized)', color='cyan')
-ax1.plot(history['train_sharpe'], label='Train Sharpe', color='cyan')
-ax1.plot(history['val_sharpe'], label='Validation Sharpe', color='magenta', linestyle='--')
-ax1.tick_params(axis='y', labelcolor='cyan')
-ax1.legend(loc='upper left')
-ax2 = ax1.twinx()
-ax2.set_ylabel('Loss', color='lime')
-ax2.plot(history['train_loss'], label='Train Loss', color='lime', alpha=0.6)
-ax2.tick_params(axis='y', labelcolor='lime')
-ax2.legend(loc='upper right')
-fig.tight_layout()
-plt.title('Training and Validation Performance Over Epochs (All Indicators)')
-plt.show()
+
 
 # --- Set up for final visualization in the next cell ---
 test_loader = val_loader
@@ -647,135 +708,228 @@ import numpy as np
 
 def visualize_lstm_performance(model, test_loader, original_test_df, decision_dates, company_ticker="GOOGL"):
     """
-    Evaluates the LSTM model on the test set, simulates portfolio performance,
-    and generates a detailed visualization chart. (Corrected for device error)
+    Evaluates LSTM model with proper portfolio value tracking (cash + unrealized P&L)
     """
     model.eval()
     all_decisions = []
 
-    # 1. Get model decisions for the entire test set
+    # Get model decisions
     with torch.no_grad():
-        # The test_loader provides data batches, which are on the CPU by default
         for x_batch, banks_batch, y_batch in test_loader:
-
-            # --- CRITICAL FIX: Move the input data to the correct device ---
             x_batch = x_batch.to(device)
             banks_batch = banks_batch.to(device)
-
-            # Reshape banks for the model
             banks_list_batch = [banks_batch[:, i, :] for i in range(model.num_indicators)]
-
-            # Now the model and data are on the same device
             decisions = model(x_batch, banks_list_batch)
-
-            # Move decisions back to CPU for numpy/pandas operations
             all_decisions.extend(decisions.cpu().numpy().flatten())
 
-    # 2. Create a pandas Series with the correct dates
     decisions_series = pd.Series(all_decisions, index=decision_dates)
 
-    # 3. Simulate portfolio and log trades
+    # Portfolio simulation with proper total value tracking
     initial_capital = 100000.0
     capital = initial_capital
     position = 0
-    portfolio_values = pd.Series(index=original_test_df.index, dtype=float)
+    shares_held = 0
+    portfolio_values = []
+    portfolio_dates = []
     trade_log = []
 
-    # Use a more sensitive threshold based on previous findings
-    trade_threshold = 0.01
+    trade_threshold = 0.7
+    transaction_fee = 5.0  # Use float for consistency
+    lambda_worst_case = 1.2  # Worst-case multiplier for short selling
 
     for i in range(len(original_test_df)):
         date = original_test_df.index[i]
-
-        if position != 0 and i > 0:
-            current_price = original_test_df[f'{company_ticker}_close'].iloc[i]
-            previous_price = original_test_df[f'{company_ticker}_close'].iloc[i-1]
-            daily_return = (current_price / previous_price) - 1
-            capital *= (1 + position * daily_return)
-
-        portfolio_values.iloc[i] = capital
+        current_price = original_test_df[f'{company_ticker}_close'].iloc[i]
 
         if date in decisions_series.index:
             decision = decisions_series[date]
-            current_price = original_test_df[f'{company_ticker}_close'].iloc[i]
 
+            # Close existing position if signal changes or weakens
             if position != 0 and (abs(decision) < trade_threshold or np.sign(decision) != position):
-                action = 'close_long' if position > 0 else 'close_short'
-                trade_log.append({'date': date, 'action': action, 'price': current_price})
+                if position == 1:  # Close long
+                    # MODIFIED: Subtract exit fee from sale proceeds
+                    proceeds = (shares_held * current_price) - transaction_fee
+                    capital += proceeds
+                    trade_log.append(
+                        {'date': date, 'action': 'close_long', 'price': current_price, 'shares': shares_held,
+                         'proceeds': proceeds})
+                else:  # Close short
+                    # MODIFIED: Add exit fee to buy-back cost
+                    cost = (shares_held * current_price) + transaction_fee
+                    capital -= cost
+                    trade_log.append(
+                        {'date': date, 'action': 'close_short', 'price': current_price, 'shares': shares_held,
+                         'cost': cost})
+
                 position = 0
+                shares_held = 0
 
+            # Open new position if no current position
             if position == 0:
-                if decision > trade_threshold:
-                    position = 1
-                    trade_log.append({'date': date, 'action': 'open_long', 'price': current_price})
-                elif decision < -trade_threshold:
-                    position = -1
-                    trade_log.append({'date': date, 'action': 'open_short', 'price': current_price})
+                if decision > trade_threshold:  # Go long
+                    # MODIFIED: Account for entry fee when calculating shares to buy
+                    shares_to_buy = int((capital - transaction_fee) / current_price)
+                    if shares_to_buy > 0:
+                        # MODIFIED: Add entry fee to purchase cost
+                        cost = (shares_to_buy * current_price) + transaction_fee
+                        capital -= cost
+                        shares_held = shares_to_buy
+                        position = 1
+                        trade_log.append(
+                            {'date': date, 'action': 'open_long', 'price': current_price, 'shares': shares_held,
+                             'cost': cost})
 
-    portfolio_values.dropna(inplace=True)
+                elif decision < -trade_threshold:  # Go short
+                    # MODIFIED: Account for entry fee when calculating shares to short
+                    worst_case_price = lambda_worst_case * current_price
+                    if capital > transaction_fee:  # Ensure we can at least pay the fee
+                        shares_to_short = int((capital - transaction_fee) / worst_case_price)
+                    else:
+                        shares_to_short = 0
+                    if shares_to_short > 0:
+                        # MODIFIED: Subtract entry fee from short sale proceeds
+                        proceeds = (shares_to_short * current_price) - transaction_fee
+                        capital += proceeds
+                        shares_held = shares_to_short
+                        position = -1
+                        trade_log.append(
+                            {'date': date, 'action': 'open_short', 'price': current_price, 'shares': shares_held,
+                             'proceeds': proceeds})
 
-    # 4. Calculate Final Performance Metrics
-    if portfolio_values.empty:
-        print("Could not generate portfolio values for visualization.")
-        return
+        # Calculate TOTAL portfolio value = cash + unrealized P&L
+        current_position_value = 0
+        if position == 1:  # Long position
+            current_position_value = shares_held * current_price
+        elif position == -1:  # Short position
+            current_position_value = -1 * shares_held * current_price
 
-    cumulative_return = (portfolio_values.iloc[-1] / initial_capital - 1) * 100
-    returns = portfolio_values.pct_change().dropna()
-    sharpe_ratio = 0
-    if returns.std() > 1e-9:
-        sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
+        portfolio_value = capital + current_position_value
+        portfolio_values.append(portfolio_value)
+        portfolio_dates.append(date)
 
-    annualized_volatility = returns.std() * np.sqrt(252) * 100
-    rolling_max = portfolio_values.cummax()
-    drawdown = (portfolio_values - rolling_max) / rolling_max
-    max_drawdown = drawdown.min() * 100
+    # Convert to pandas series for easier plotting
+    portfolio_series = pd.Series(portfolio_values, index=portfolio_dates)
 
-    print("\n--- LSTM Model Test Set Performance ---")
-    print(f"Cumulative Return: {cumulative_return:.2f}%")
-    print(f"Annualized Volatility: {annualized_volatility:.2f}%")
-    print(f"Annualized Sharpe Ratio: {sharpe_ratio:.4f}")
-    print(f"Maximum Drawdown: {max_drawdown:.2f}%")
-    print(f"Total Trades Initiated: {len([t for t in trade_log if 'open' in t['action']])}")
+    # Calculate performance metrics
+    if len(portfolio_values) > 1:
+        cumulative_return = (portfolio_values[-1] / initial_capital - 1) * 100
+        returns = portfolio_series.pct_change().dropna()
+        sharpe_ratio = 0
+        if returns.std() > 1e-9:
+            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
 
-    # 5. Generate Visualization
+        annualized_volatility = returns.std() * np.sqrt(252) * 100
+        rolling_max = portfolio_series.cummax()
+        drawdown = (portfolio_series - rolling_max) / rolling_max
+        max_drawdown = drawdown.min() * 100
+
+        print(f"\n--- LSTM Performance Analysis ---")
+        print(f"Initial Capital: ${initial_capital:,.2f}")
+        print(f"Final Portfolio Value: ${portfolio_values[-1]:,.2f}")
+        print(f"Cumulative Return: {cumulative_return:.2f}%")
+        print(f"Annualized Volatility: {annualized_volatility:.2f}%")
+        print(f"Sharpe Ratio: {sharpe_ratio:.4f}")
+        print(f"Max Drawdown: {max_drawdown:.2f}%")
+        print(f"Total Trades: {len([t for t in trade_log if 'open' in t['action']])}")
+        print(f"Final Position: {'Long' if position == 1 else 'Short' if position == -1 else 'None'}")
+        print(f"Final Cash: ${capital:,.2f}")
+        if shares_held > 0:
+            print(f"Shares Held: {shares_held:,}")
+
+        # Analysis of decision patterns
+        decision_stats = decisions_series.describe()
+        print(f"\nDecision Signal Stats:")
+        print(f"Mean: {decision_stats['mean']:.4f}")
+        print(f"Std: {decision_stats['std']:.4f}")
+        print(f"Above threshold (+{trade_threshold}): {(decisions_series > trade_threshold).sum()}")
+        print(f"Below threshold (-{trade_threshold}): {(decisions_series < -trade_threshold).sum()}")
+        print(f"In neutral zone: {(abs(decisions_series) <= trade_threshold).sum()}")
+
+    # Create visualization
     plt.style.use('dark_background')
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), gridspec_kw={'height_ratios': [2, 1]})
-    fig.suptitle(f'LSTM Agent Performance on Test Set for {company_ticker}', fontsize=16)
+    fig, axes = plt.subplots(3, 1, figsize=(16, 14), gridspec_kw={'height_ratios': [2, 1, 1]})
 
-    ax1.plot(portfolio_values.index, portfolio_values, label='Portfolio Value', color='cyan')
-    ax1.set_title(f'Portfolio Performance | Final Value: ${portfolio_values.iloc[-1]:,.2f} | Sharpe: {sharpe_ratio:.2f}')
-    ax1.set_ylabel('Portfolio Value ($)')
-    ax1.grid(True, linestyle='--', alpha=0.5)
+    # Portfolio value plot (including unrealized P&L)
+    axes[0].plot(portfolio_series.index, portfolio_series, label='Total Portfolio Value', color='cyan', linewidth=2)
+    axes[0].axhline(y=initial_capital, color='gray', linestyle='--', alpha=0.5, label='Initial Capital')
+    axes[0].set_title(f'LSTM Portfolio Performance - {company_ticker} (Cash + Unrealized P&L)', fontsize=14)
+    axes[0].set_ylabel('Portfolio Value ($)')
+    axes[0].grid(True, alpha=0.3)
 
-    buy_signals = [trade for trade in trade_log if 'open_long' in trade['action']]
-    sell_signals = [trade for trade in trade_log if 'open_short' in trade['action']]
+    # Mark trades on portfolio chart
+    for trade in trade_log:
+        trade_value = portfolio_series.loc[trade['date']]
+        if 'open_long' in trade['action']:
+            axes[0].scatter(trade['date'], trade_value, color='lime', s=80, marker='^', alpha=0.8, zorder=5)
+        elif 'open_short' in trade['action']:
+            axes[0].scatter(trade['date'], trade_value, color='red', s=80, marker='v', alpha=0.8, zorder=5)
+        elif 'close' in trade['action']:
+            axes[0].scatter(trade['date'], trade_value, color='yellow', s=60, marker='o', alpha=0.8, zorder=5)
 
-    if buy_signals:
-        buy_dates = [trade['date'] for trade in buy_signals]
-        ax1.plot(buy_dates, portfolio_values.loc[buy_dates], '^', color='lime', markersize=8, label='Buy Signal')
-    if sell_signals:
-        sell_dates = [trade['date'] for trade in sell_signals]
-        ax1.plot(sell_dates, portfolio_values.loc[sell_dates], 'v', color='red', markersize=8, label='Sell Signal')
-    ax1.legend()
+    axes[0].legend()
 
+    # Stock price with trades
     price_col = f'{company_ticker}_close'
-    ax2.plot(original_test_df.index, original_test_df[price_col], label=f'{company_ticker} Price', color='white', alpha=0.9)
+    axes[1].plot(original_test_df.index, original_test_df[price_col],
+                label=f'{company_ticker} Price', color='white', alpha=0.9, linewidth=1.5)
 
-    if buy_signals:
-        ax2.plot([t['date'] for t in buy_signals], [t['price'] for t in buy_signals], '^', color='lime', markersize=8)
-    if sell_signals:
-        ax2.plot([t['date'] for t in sell_signals], [t['price'] for t in sell_signals], 'v', color='red', markersize=8)
+    for trade in trade_log:
+        if 'open_long' in trade['action']:
+            axes[1].scatter(trade['date'], trade['price'], color='lime', s=100, marker='^', alpha=0.8, zorder=5)
+        elif 'open_short' in trade['action']:
+            axes[1].scatter(trade['date'], trade['price'], color='red', s=100, marker='v', alpha=0.8, zorder=5)
+        elif 'close' in trade['action']:
+            axes[1].scatter(trade['date'], trade['price'], color='yellow', s=80, marker='o', alpha=0.8, zorder=5)
 
-    ax2.set_title('Stock Price with LSTM Trade Entry Points')
-    ax2.set_ylabel('Stock Price (Original Scale)')
-    ax2.set_xlabel('Date')
-    ax2.grid(True, linestyle='--', alpha=0.5)
-    ax2.legend()
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    axes[1].set_title('Stock Price with Trade Signals')
+    axes[1].set_ylabel('Price ($)')
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    # Decision signals over time
+    axes[2].plot(decisions_series.index, decisions_series, label='LSTM Decision', color='orange', alpha=0.8, linewidth=1.5)
+    axes[2].axhline(y=trade_threshold, color='lime', linestyle=':', alpha=0.7, label=f'Long Threshold (+{trade_threshold})')
+    axes[2].axhline(y=-trade_threshold, color='red', linestyle=':', alpha=0.7, label=f'Short Threshold (-{trade_threshold})')
+    axes[2].axhline(y=0, color='gray', linestyle='-', alpha=0.5)
+    axes[2].fill_between(decisions_series.index, -trade_threshold, trade_threshold, alpha=0.1, color='gray', label='Neutral Zone')
+    axes[2].set_title('LSTM Decision Signals')
+    axes[2].set_ylabel('Decision Value')
+    axes[2].set_xlabel('Date')
+    axes[2].grid(True, alpha=0.3)
+    axes[2].legend()
+
+    plt.tight_layout()
     plt.show()
 
-# --- RUN THE VISUALIZATION ---
-# All variables (model, test_loader, original_test_df, test_dates) should be in memory
-# from the successfully executed Cell 6.
+    return trade_log, portfolio_series
 
-visualize_lstm_performance(model, test_loader, original_test_df, test_dates, company_ticker="MSFT")
+print("\n--- Generating Dynamic Parameter Visualizations ---")
+
+# Define the names of your indicators in the order they were created in the indicator bank
+indicator_names = [
+    "SMA Difference", "EMA Difference", "RSI", "Bollinger Band Position",
+    "On-Balance Volume (OBV)", "MACD Signal Difference", "P/E Ratio"
+]
+
+print("\n--- Generating Dynamic Parameter Visualizations for All Indicators ---")
+
+
+
+# 1. Extract the parameters from the test (validation) set once
+weights, thresholds, ind_values = get_dynamic_parameters(model, test_loader, device)
+
+# 2. Loop through and plot the parameters for each of the 7 indicators
+for i in range(len(indicator_names)):
+    print(f"\nPlotting parameters for: {indicator_names[i]} (Indicator {i+1}/{len(indicator_names)})...")
+    plot_dynamic_parameters(
+        dates=test_dates,
+        weights=weights,
+        thresholds=thresholds,
+        indicator_values=ind_values,
+        indicator_names=indicator_names,
+        window_sizes=window_sizes,
+        indicator_to_plot_idx=i
+    )
+
+# Usage
+trade_log, portfolio_series = visualize_lstm_performance(model, test_loader, original_test_df, test_dates, company_ticker="MSFT")
