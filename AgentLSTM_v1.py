@@ -368,7 +368,7 @@ def prepare_training_data(df, indicator_dfs, feature_cols, seq_len=256):
 
 # --- LSTM Model ---
 class LSTMTradingAgent(nn.Module):
-    def __init__(self, d_input, d_hidden, num_indicators, window_sizes, dropout_prob=0.3, tau=1.0):
+    def __init__(self, d_input, d_hidden, num_indicators, window_sizes, dropout_prob=0.3, tau=1):
         super().__init__()
         self.num_indicators = num_indicators
         self.window_sizes = window_sizes
@@ -376,7 +376,7 @@ class LSTMTradingAgent(nn.Module):
         self.tau = tau
 
         self.lstm = nn.LSTM(input_size=d_input, hidden_size=d_hidden, batch_first=True,
-                            dropout=dropout_prob, num_layers=2)
+                            dropout=dropout_prob, num_layers=4)
         self.dropout = nn.Dropout(dropout_prob)
 
         self.window_heads = nn.ModuleList([nn.Linear(d_hidden, self.M) for _ in range(num_indicators)])
@@ -446,8 +446,8 @@ def get_performance(model, loader, device, num_indicators):
     return (all_returns.mean() / (all_returns.std() + epsilon)).item()
 
 
-def train_model(model, train_loader, val_loader, device, epochs=150):
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
+def train_model(model, train_loader, val_loader, device, epochs=2000):
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     history = {'train_loss': [], 'train_sharpe': [], 'val_sharpe': []}
 
     print("\nStarting model training")
@@ -758,8 +758,8 @@ def run_lstm_trading_system(symbol="MSFT"):
 
     train_dataset = TensorDataset(X_train, banks_train, y_train)
     val_dataset = TensorDataset(X_val, banks_val, y_val)
-    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=512, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=512, shuffle=False)
 
     print(f"Data prepared. Train samples: {len(X_train)}, Validation samples: {len(X_val)}")
 
